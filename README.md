@@ -29,7 +29,7 @@ when you click "Run with these dates" on the Select page.
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/joshlewis180/edges3-website.git
+git clone https://github.com/edges-collab/edges3-website.git
 cd edges3-website
 ```
 
