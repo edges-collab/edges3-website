@@ -1,0 +1,77 @@
+# ----- Python -----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ----- Virtualenvs / conda envs -----
+venv/
+.venv/
+env/
+.env
+env.bak/
+venv.bak/
+
+# ----- Runtime outputs (the entire OUTPUT_ROOT) -----
+# Set EDGES_OUTPUT_ROOT elsewhere; do NOT commit its contents.
+/outputs/
+/backend/outputs/
+
+# ----- Raw data (large, environment-specific, NEVER in the repo) -----
+# The pipeline reads the raw MRO tree from $EDGES_RAW_DATA_ROOT, which
+# on local macOS happens to be a sibling directory called data5/ and on
+# the cluster is mounted at /data5/edges/... . It is NEVER part of this
+# repository; the patterns below are defensive in case anyone symlinks
+# or copies it in.
+/data5/
+/data/
+/raw/
+/mro/
+/acq/
+*.acq
+*.log.gz
+
+
+# ----- Node / frontend -----
+node_modules/
+/frontend/dist/
+/frontend/.vite/
+/frontend/build/
+/frontend/coverage/
+
+# ----- IDE / editor -----
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ----- Logs -----
+*.log
+!backend/**/*.log
+*.pid
+*.seed
+*.pid.lock
+
+# ----- OS -----
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+ehthumbs.db
+Desktop.ini
+
+# ----- Build artefacts ----
+*.tsbuildinfo
+.eslintcache
+.parcel-cache
+.cache/

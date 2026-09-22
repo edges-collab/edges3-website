@@ -1,0 +1,70 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  overflow: hidden;
+}
+
+.app {
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.page {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.nav-button {
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+
+.edges-logo {
+  font-weight: bolder;
+  padding-top: 10px;
+}
+
+.parameter-input {
+  max-width: 500px;
+  text-align: right;
+}
+
+.select-panel {
+  overflow-y: auto;
+}
+
+.data-panel {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.plot-wrapper {
+  flex: 0 0 auto;
+  width: 100%;
+  border: 1px solid black;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}

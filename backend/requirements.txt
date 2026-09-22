@@ -1,0 +1,32 @@
+# Python dependencies for the EDGES-3 web backend.
+#
+# Install with uv:
+#   uv venv .venv --python 3.11
+#   source .venv/bin/activate
+#   uv pip install -r requirements.txt
+#
+# Every package below is available on PyPI (or via pip from the
+# edges-3 GitHub index) so this file alone is sufficient — no conda
+# environment, no separate system packages.
+
+# Web framework
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.5
+# starlette < 0.49.1 has CVE-2025-62727 (O(n^2) ReDoS via crafted
+# Range headers on FileResponse / StaticFiles — both used by this app).
+starlette>=0.49.1
+
+# EDGES scientific stack (the heavy hitters)
+edges-analysis>=8.3
+edges-io>=4.1
+pygsdata>=0.3
+read-acq>=1.2
+
+# Numerics + plotting
+numpy>=1.26
+scipy>=1.11
+matplotlib>=3.8
+astropy>=6.0
+h5py>=3.10
+hickle>=5.0
