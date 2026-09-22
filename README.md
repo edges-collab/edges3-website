@@ -65,7 +65,7 @@ npm install                 # one-off
 
 ---
 
-## Run the server (every session, on the SSH cluster)
+## Run the server (on the SSH cluster)
 
 You'll need **one terminal** connected to the SSH cluster. The FastAPI
 backend serves both the API and the built React SPA, so no separate
@@ -88,7 +88,12 @@ EDGES_PYTHON=$(which python) \
   python -m uvicorn backend_api:app --host 127.0.0.1 --port 8003
 ```
 
-Leave it running. It serves:
+`EDGES_PYTHON=$(which python)` ensures the pipeline subprocess uses the
+venv's interpreter (it is already `sys.executable`, but this keeps the
+behaviour explicit and independent of PATH when launched from a wrapper
+script).
+
+The server serves:
 
 * `/`             — the React SPA (`frontend/dist/`)
 * `/data/...`     — `OUTPUT_ROOT` (manifest, `runs/<id>/...`, saved zips)
@@ -97,6 +102,34 @@ Leave it running. It serves:
 Defaults in `backend/config.py` point at the cluster paths
 (`/data5/edges/data/EDGES3_data/MRO` for raw data, `<repo>/outputs`
 for outputs). Override any of them with the env vars documented below.
+
+### Keeping the server running (tmux)
+
+The steps above tie the server to your terminal: closing the SSH
+connection kills it. To keep the backend running after you log out —
+and to avoid needing a terminal open on your laptop at all — run it
+inside a detached `tmux` session:
+
+```bash
+# On the cluster:
+tmux new -s edges
+cd edges3-website
+source .venv/bin/activate
+cd backend
+EDGES_PYTHON=$(which python) \
+  python -m uvicorn backend_api:app --host 127.0.0.1 --port 8003
+```
+
+Detach with `Ctrl-b` then `d`. The server keeps running in the
+background; you can close the SSH connection and your terminal. The
+server must be (re)started this way after the cluster reboots.
+
+Reattach to inspect logs, or stop the server:
+
+```bash
+tmux attach -t edges       # view live output; Ctrl-b d to detach again
+tmux kill-session -t edges # stop the server
+```
 
 ### View the UI from your laptop
 
