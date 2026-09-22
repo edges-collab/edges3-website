@@ -94,13 +94,20 @@ function MultiPlotter({ input }: MultiPlotProps) {
   }
 
   const trace1 = { x, y: y1, type: "scatter" as const, mode: "lines" as const, name: name1 }
-  let trace2
-  if (displayMode === "Residuals") {
-    const diff = y1.map((v, i) => v - y2[i])
-    trace2 = { x, y: diff, type: "scatter" as const, mode: "lines" as const, name: `${name1} − ${name2}` }
-  } else {
-    trace2 = { x, y: y2, type: "scatter" as const, mode: "lines" as const, name: name2 }
-  }
+  const trace2 = { x, y: y2, type: "scatter" as const, mode: "lines" as const, name: name2 }
+  // In Residuals mode BOTH original traces are replaced by the single
+  // difference curve — otherwise the original line stays on top of the
+  // residual and the plot shows three curves at once.
+  const traces =
+    displayMode === "Residuals"
+      ? [{
+          x,
+          y: y1.map((v, i) => v - y2[i]),
+          type: "scatter" as const,
+          mode: "lines" as const,
+          name: `${name1} − ${name2}`,
+        }]
+      : [trace1, trace2]
 
   return (
     <div className="plot-wrapper d-flex flex-column">
@@ -116,7 +123,7 @@ function MultiPlotter({ input }: MultiPlotProps) {
         )}
       </div>
       <Plot
-        data={[trace1, trace2]}
+        data={traces}
         layout={{
           autosize: true,
           height: 300,
