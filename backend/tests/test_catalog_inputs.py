@@ -1,19 +1,17 @@
-"""Tests of the catalog-based Select/Calibration inputs (see conftest)."""
+"""Tests of the catalog-based calibration/observation inputs (see conftest)."""
 
 from __future__ import annotations
 
-import importlib
 import json
-import sys
+import os
 
 import pytest
-from conftest import CAL_DATE, S11_GOOD, S11_LABELS, S11_OLD, T_A, T_B, T_DAY
+from conftest import CAL_DATE, S11_GOOD, S11_LABELS, S11_OLD, T_A, T_B, T_C, UTC
 
 import catalog_inputs
 import products_api
 
-RAW_A = T_A.strftime("2025_100_%H_%M_%S")
-RAW_DAY = T_DAY.strftime("2025_101_%H_%M_%S")
+NIGHT = "2025-04-10"
 
 
 @pytest.fixture
@@ -24,76 +22,20 @@ def cat(settings):
     products_api.configure(None)
 
 
-@pytest.fixture
-def api(settings, tmp_path, monkeypatch):
-    """The main app, with outputs in a temporary directory and no pipeline runs."""
-    from fastapi.testclient import TestClient
-
-    monkeypatch.setenv("EDGES_OUTPUT_ROOT", str(tmp_path / "outputs"))
-    monkeypatch.setenv("EDGES_RAW_DATA_ROOT", str(tmp_path / "no-raw-data"))
-    for m in ("config", "catalog_inputs", "backend_api"):
-        sys.modules.pop(m, None)
-    backend_api = importlib.import_module("backend_api")
-    products_api.configure(settings)
-    calls = []
-
-    def fake_run(cmd):
-        calls.append(cmd)
-        run_dir = cmd[cmd.index("--run_dir") + 1]
-        (tmp_path / "outputs" / "manifest.json").write_text(
-            json.dumps({"plots": [], "latest_run": run_dir.rsplit("/", 1)[-1]})
-        )
-
-    monkeypatch.setattr(backend_api, "_execute_subprocess", fake_run)
-    yield TestClient(backend_api.app), backend_api, calls
-    products_api.configure(None)
-    for m in ("config", "catalog_inputs", "backend_api"):
-        sys.modules.pop(m, None)
-    importlib.import_module("catalog_inputs")
-
-
-def test_available_dates(cat):
-    d = catalog_inputs.available_dates(cat)
+def test_calibration_options(cat):
+    d = catalog_inputs.calibration_options(cat)
     assert d["calibration"] == [CAL_DATE]  # all four loads start that day
     assert d["s11"] == [S11_OLD, S11_GOOD]
-    assert RAW_A in d["raw"] and d["raw"] == sorted(d["raw"])
-    assert d["raw"][-1] == RAW_DAY
 
 
-def test_resolve_dates(cat):
-    avail = catalog_inputs.available_dates(cat)
-    r = catalog_inputs.resolve_dates(cat, {"cal": "Latest", "s11": "Latest", "raw": "Latest"}, avail)
-    # "Latest" S11 = the session the catalog recommends for the calibration
-    # day; "Latest" raw skips short files (T_DAY has 5 cycles, all have < 100)
-    assert r["cal"] == CAL_DATE and r["s11"] == S11_GOOD
-    assert r["raw"] == RAW_DAY  # no file is long enough: fall back to the last
-    catalog_inputs.MIN_LATEST_RAW_CYCLES = 30
-    try:
-        r = catalog_inputs.resolve_dates(cat, {}, avail)
-        assert r["raw"] == T_B.strftime("2025_100_%H_%M_%S")  # latest with >= 30 cycles
-        catalog_inputs.MIN_LATEST_RAW_CYCLES = 1
-        # T_DAY is the newest file, so it may still be being written: skipped
-        r = catalog_inputs.resolve_dates(cat, {}, avail)
-        assert r["raw"] != RAW_DAY and r["raw"] < RAW_DAY
-    finally:
-        catalog_inputs.MIN_LATEST_RAW_CYCLES = 100
-    with pytest.raises(catalog_inputs.InputError):
-        catalog_inputs.resolve_dates(cat, {"cal": "2025_001"}, avail)
-    with pytest.raises(catalog_inputs.InputError):
-        catalog_inputs.resolve_dates(cat, {"s11": "2020_001_00"}, avail)
-
-
-def test_resolve_inputs(cat):
-    inp = catalog_inputs.resolve_inputs(cat, {"cal": CAL_DATE, "s11": S11_GOOD, "raw": RAW_A})
+def test_resolve_calibration(cat):
+    inp = catalog_inputs.resolve_calibration(cat)  # Latest / Latest
     json.dumps(inp, allow_nan=False)
+    assert inp["dates"] == {"cal": CAL_DATE, "s11": S11_GOOD}  # the catalog's pick
     f = inp["files"]
     assert f["amb"].endswith(f"mro/amb/2025/{CAL_DATE}_03_00_00_amb.acq")
     assert f["short"].endswith(f"{CAL_DATE}_06_00_00_short.acq")
-    assert f["ant"].endswith(f"{RAW_A}_ant.acq")
     assert set(f["s11"]) == set(S11_LABELS)
-    assert f["s11"]["O"].endswith(f"{S11_GOOD}_O.s1p")
-    assert inp["recommended_s11"] == S11_GOOD
-
     t = inp["temperatures"]
     # ambient: the .tmp snapshot (27 C), not the log (which has no reading then)
     assert t["ambient"]["source"] == "snapshot"
@@ -101,83 +43,90 @@ def test_resolve_inputs(cat):
     # hot load: the log reading of probe 102 nearest the hot spectrum
     assert t["hot"]["source"] == "templog" and t["hot"]["probe"] == 102
     assert t["hot"]["temperature_c"] == pytest.approx(111.0)
-    # LNA and the "actual" ambient at the observation: probe 100 in the log
-    assert t["lna"]["source"] == "templog" and t["lna"]["temperature_c"] == pytest.approx(25.0)
-    assert t["obs_ambient"]["temperature_c"] == pytest.approx(25.0)
-    assert not any("temperature" in i for i in inp["issues"])
+    assert inp["issues"] == []
+    assert all(v["live"] and v["catalog_sha256"] for v in inp["file_versions"].values())
 
 
-def test_auto_s11_needs_a_nearby_session(cat, monkeypatch):
-    avail = catalog_inputs.available_dates(cat)
+def test_resolve_calibration_issues(cat, monkeypatch):
+    inp = catalog_inputs.resolve_calibration(cat, CAL_DATE, S11_OLD)
+    assert any(f"S11 session {S11_OLD} chosen; the catalog recommends {S11_GOOD}" in i
+               for i in inp["issues"])
+    with pytest.raises(catalog_inputs.InputError):
+        catalog_inputs.resolve_calibration(cat, "2025_001")
+    with pytest.raises(catalog_inputs.InputError):
+        catalog_inputs.resolve_calibration(cat, CAL_DATE, "2020_001_00")
+    # "Auto" S11 needs a usable recommendation
     monkeypatch.setattr(catalog_inputs, "recommended_s11", lambda cat, day: None)
     with pytest.raises(catalog_inputs.InputError, match="choose one explicitly"):
-        catalog_inputs.resolve_dates(cat, {}, avail)
-    # a recommendation the site cannot use (not in its list) is refused too
-    monkeypatch.setattr(catalog_inputs, "recommended_s11", lambda cat, day: "2025_102_09")
+        catalog_inputs.resolve_calibration(cat)
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "nights"),
+    [
+        ((2025, 4, 10, 9, 18), (2025, 4, 10, 12, 14), ["2025-04-10"]),  # 17:18-20:14 AWST
+        ((2025, 4, 11, 5, 0), (2025, 4, 11, 5, 2), []),  # 13:00 AWST: no night
+        ((2025, 4, 10, 21, 0), (2025, 4, 11, 0, 0), ["2025-04-10"]),  # 05:00-08:00 AWST
+        ((2025, 4, 10, 9, 0), (2025, 4, 11, 11, 0), ["2025-04-10", "2025-04-11"]),
+    ],
+)
+def test_night_dates_of(start, end, nights):
+    from datetime import datetime
+
+    t0 = datetime(*start, tzinfo=UTC).timestamp()
+    t1 = datetime(*end, tzinfo=UTC).timestamp()
+    assert catalog_inputs._night_dates_of(t0, t1) == nights
+
+
+def test_observation_options(cat):
+    d = catalog_inputs.observation_options(cat)
+    assert d["nights"] == [NIGHT]  # the daytime file (T_DAY) is in no night
+    assert d["antenna_s11"] == [S11_OLD, S11_GOOD]
+
+
+def test_resolve_observation(cat):
+    inp = catalog_inputs.resolve_observation(cat)  # Latest / Latest
+    json.dumps(inp, allow_nan=False)
+    assert inp["night"]["date"] == NIGHT
+    assert inp["night"]["end_unix"] - inp["night"]["start_unix"] == 12 * 3600
+    names = [f["name"] for f in inp["files"]["ant"]]
+    for t in (T_A, T_B, T_C):
+        assert t.strftime("2025_100_%H_%M_%S_ant.acq") in names
+    # no session before the night: the first one after it
+    assert inp["dates"]["ant_s11"] == S11_OLD == inp["recommended_ant_s11"]
+    assert {"ant", "O", "S", "L"} <= set(inp["files"]["ant_s11"])
+    by_name = {f["name"]: f for f in inp["files"]["ant"]}
+    a = by_name[T_A.strftime("2025_100_%H_%M_%S_ant.acq")]["temperatures"]
+    assert a["lna"]["source"] == "templog" and a["lna"]["temperature_c"] == pytest.approx(25.0)
+    # the 12:00 file has no log reading within 15 min: fallback + issue
+    b = by_name[T_B.strftime("2025_100_%H_%M_%S_ant.acq")]["temperatures"]
+    assert b["lna"]["source"] == "default"
+    assert any(i.startswith("no lna temperature") for i in inp["issues"])
+
+
+def test_resolve_observation_errors(cat):
     with pytest.raises(catalog_inputs.InputError):
-        catalog_inputs.resolve_dates(cat, {}, avail)
+        catalog_inputs.resolve_observation(cat, "2025-04-12")
+    with pytest.raises(catalog_inputs.InputError):
+        catalog_inputs.resolve_observation(cat, NIGHT, "2020_001_00")
+    inp = catalog_inputs.resolve_observation(cat, NIGHT, S11_GOOD)
+    assert any("chosen; the nearest before the night" in i for i in inp["issues"])
 
 
-def test_inputs_digest_sees_changed_files(api, cat):
-    _, backend_api, _ = api
-    dates = {"cal": CAL_DATE, "s11": S11_GOOD, "raw": RAW_A}
-    inp = catalog_inputs.resolve_inputs(cat, dates)
-    before = backend_api._inputs_digest(inp)
-    assert all(v["live"] and v["catalog_sha256"] for v in inp["file_versions"].values())
-    ant = inp["files"]["ant"]
-    import os
-
-    st = os.stat(ant)
-    os.utime(ant, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))  # (synthetic file)
+def test_file_versions_see_changes(cat):
+    inp = catalog_inputs.resolve_calibration(cat)
+    path = inp["files"]["amb"]
+    st = os.stat(path)
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))  # (synthetic file)
     try:
-        assert backend_api._inputs_digest(catalog_inputs.resolve_inputs(cat, dates)) != before
+        assert catalog_inputs.resolve_calibration(cat)["file_versions"] != inp["file_versions"]
     finally:
-        os.utime(ant, ns=(st.st_atime_ns, st.st_mtime_ns))
-
-
-def test_resolve_inputs_issues(cat):
-    inp = catalog_inputs.resolve_inputs(cat, {"cal": CAL_DATE, "s11": S11_OLD, "raw": RAW_DAY})
-    issues = " | ".join(inp["issues"])
-    assert f"S11 session {S11_OLD} chosen; the catalog recommends {S11_GOOD}" in issues
-    # no log reading within 15 min of the daytime antenna file: fallback + issue
-    assert inp["temperatures"]["lna"]["source"] == "default"
-    assert "no lna temperature (probe 100)" in issues
-    with pytest.raises(catalog_inputs.InputError):
-        catalog_inputs.resolve_inputs(cat, {"cal": CAL_DATE, "s11": S11_GOOD, "raw": "2020_001_00_00_00"})
-
-
-def test_endpoints(api):
-    client, _, _ = api
-    d = client.get("/available_dates").json()
-    assert d["calibration"] == [CAL_DATE]
-    r = client.get("/api/calibration/inputs", params={"raw": RAW_A})
-    assert r.status_code == 200
-    assert r.json()["dates"] == {"cal": CAL_DATE, "s11": S11_GOOD, "raw": RAW_A}
-    assert client.get("/api/calibration/inputs", params={"cal": "1999_001"}).status_code == 400
-
-
-def test_run_pipeline_passes_catalog_inputs(api):
-    client, backend_api, calls = api
-    r = client.post("/run_pipeline", json={"dates": {"cal": CAL_DATE, "s11": S11_OLD, "raw": RAW_A}})
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert any("recommends" in i for i in body["issues"])
-    (cmd,) = calls
-    assert "--inputs" in cmd
-    for gone in ("--rawdata_root", "--temperature_log", "--cal_date"):
-        assert gone not in cmd
-    inputs = json.loads(open(cmd[cmd.index("--inputs") + 1]).read())
-    assert inputs["dates"] == {"cal": CAL_DATE, "s11": S11_OLD, "raw": RAW_A}
-    latest = client.get("/latest_run").json()
-    assert latest["input_issues"] == inputs["issues"]
-    # same dates, parameters and inputs: reused, not recomputed
-    client.post("/run_pipeline", json={"dates": {"cal": CAL_DATE, "s11": S11_OLD, "raw": RAW_A}})
-    assert len(calls) == 1
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
 
 
 def test_align_s11_grids_uses_given_files(cat, tmp_path):
     rsd = pytest.importorskip("run_single_day")
-    inp = catalog_inputs.resolve_inputs(cat, {"cal": CAL_DATE, "s11": S11_GOOD, "raw": RAW_A})
+    inp = catalog_inputs.resolve_calibration(cat)
     shadow, warn = rsd.align_s11_grids(list(inp["files"]["s11"].values()), S11_GOOD, tmp_path)
     assert warn == []
     assert sorted(p.name for p in shadow.iterdir()) == sorted(

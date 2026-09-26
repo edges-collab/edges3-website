@@ -108,14 +108,8 @@ OUTPUT_ROOT: Path = Path(
     )
 ).expanduser().resolve()
 
-# Subdirectories within OUTPUT_ROOT. Every run lives under ``runs/``;
-# ``user_cache/`` holds the previous run for dedup; ``saved/`` holds
-# user-saved zips.
-RUNS_DIR: Path = OUTPUT_ROOT / "runs"
-SAVED_DIR: Path = OUTPUT_ROOT / "saved"
-
-MANIFEST_FILE: Path = OUTPUT_ROOT / "manifest.json"
-LATEST_RUN_FILE: Path = OUTPUT_ROOT / "latest_run.json"
+# Runs live in ``OUTPUT_ROOT/calibration/<id>/`` and
+# ``OUTPUT_ROOT/observation/<id>/`` (see runs_api.py).
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +200,7 @@ TCAB_FALLBACK_K = 306.5
 # ---------------------------------------------------------------------------
 def ensure_dirs() -> None:
     """Make sure every output subdirectory exists."""
-    for d in (OUTPUT_ROOT, RUNS_DIR, SAVED_DIR):
+    for d in (OUTPUT_ROOT, OUTPUT_ROOT / "calibration", OUTPUT_ROOT / "observation"):
         d.mkdir(parents=True, exist_ok=True)
 
 
@@ -217,8 +211,6 @@ def describe() -> str:
         f"PIPELINE_ROOT      = {os.environ.get('EDGES_PIPELINE_ROOT', '/data6/edges/edges-db')}\n"
         f"BEAM_FACTOR_FILE   = {BEAM_FACTOR_FILE}\n"
         f"OUTPUT_ROOT        = {OUTPUT_ROOT}\n"
-        f"RUNS_DIR           = {RUNS_DIR}\n"
-        f"SAVED_DIR          = {SAVED_DIR}\n"
         f"PYTHON             = {PYTHON}\n"
         f"TCOLD_FALLBACK_K   = {TCOLD_FALLBACK_K} K\n"
         f"THOT_FALLBACK_K    = {THOT_FALLBACK_K} K\n"

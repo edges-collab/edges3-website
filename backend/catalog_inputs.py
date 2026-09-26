@@ -1,39 +1,38 @@
 """
-Calibration inputs from the EDGES catalog
-=========================================
+Calibration and observation inputs from the EDGES catalog
+=========================================================
 
-Replaces the old raw-directory scanning (``scan_dates.py``) and the
-merging of every file in the temperature-log directory. Everything here
-is a read-only query of the catalog (``edges-catalog``):
+Everything here is a read-only query of the catalog (``edges-catalog``); the
+site never scans the raw data tree or merges temperature-log files. There
+are two kinds of run (see ``runs_api.py``):
 
-* :func:`available_dates` lists what the Select page offers: calibration
-  days (all four loads start that UTC day), full averaged S11 sessions
-  (``YYYY_DDD_HH`` stems) and antenna spectra (``YYYY_DDD_HH_MM_SS``).
-* :func:`resolve_dates` turns the Select page's choices (``"Latest"`` or a
-  value) into concrete ones; ``"Latest"`` for S11 means the session the
-  catalog recommends for the calibration day.
-* :func:`resolve_inputs` gives the exact files of one run and the probe
-  temperatures at the time of each calibration spectrum, plus ``issues``:
-  everything that would stop or weaken the calibration
-  (``Catalog.calibration_inputs`` and the lookups below).
+* a **calibration** (receiver calibration from one UTC day's calibration
+  spectra and a full S11 session): :func:`calibration_options`,
+  :func:`resolve_calibration`;
+* an **observation** (one night of antenna spectra, calibrated with a
+  calibration, and an antenna S11 session): :func:`observation_options`,
+  :func:`resolve_observation`.
 
-Temperatures come from ``Catalog.housekeeping`` data, which is
-de-duplicated and excludes logs of other receivers. For each spectrum, in
-order: the ``.tmp`` snapshot of that load written at the hour of the
-file's time stamp; else the temperature-log reading of *that probe*
-nearest to the spectrum's first cycle, within :data:`TEMPLOG_TOLERANCE_S`;
-else the fallback constant, with an issue. There is no substitution of
-other probes.
+Each ``resolve_*`` returns a JSON-serialisable ``inputs`` dict with the exact
+files, their versions, the probe temperatures and ``issues`` (everything
+that would stop or weaken the run). ``"Latest"`` choices are resolved here:
+the latest calibration day, the S11 session ``Catalog.calibration_inputs``
+recommends for it, the latest night with antenna data, and the antenna S11
+session nearest before the night.
 
-The resulting ``inputs`` dict is JSON-serialisable; the backend writes it
-to ``<run_dir>/inputs.json`` and ``run_single_day.py --inputs`` reads it.
+Temperatures come from ``Catalog.housekeeping`` data (de-duplicated, without
+logs of other receivers). For each spectrum, in order: the ``.tmp`` snapshot
+of that load written at the hour of the file's time stamp; else the
+temperature-log reading of *that probe* nearest to the spectrum's first
+cycle, within :data:`TEMPLOG_TOLERANCE_S`; else the fallback constant, with an
+issue.
 """
 
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import date, datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 import config
 import products_api
@@ -43,9 +42,8 @@ CAL_LOADS = ("amb", "hot", "open", "short")
 #: Temperature-log readings are every ~5.2 min; accept the nearest within this.
 TEMPLOG_TOLERANCE_S = 15 * 60
 LATEST = "Latest"
-#: "Latest" antenna spectrum: skip files shorter than this (e.g. one still
-#: being written, or a short continuation after the UTC-midnight split).
-MIN_LATEST_RAW_CYCLES = 100
+#: Warn if the antenna S11 session is further than this from the night.
+ANT_S11_WARN_DAYS = 7
 
 
 class InputError(ValueError):
@@ -67,141 +65,58 @@ def _iso(t_unix: Optional[float]) -> Optional[str]:
     return datetime.fromtimestamp(t_unix, timezone.utc).isoformat()
 
 
+def _nan_to_none(v: Any) -> Any:
+    return None if v is None or v != v else v
+
+
 # ---------------------------------------------------------------------------
-# Available dates
+# S11 sessions
 # ---------------------------------------------------------------------------
-def available_dates(cat: Any) -> Dict[str, List[str]]:
-    """Calibration days, S11 session stems and antenna spectrum stamps (sorted)."""
-    acq = cat.sql(
-        "SELECT load, stamp_unix, relpath FROM v_file WHERE kind = 'acq'"
-        " AND status = 'present' AND category = 'science' AND deployment = ?"
-        f" AND load IN ({','.join('?' * (len(CAL_LOADS) + 1))})",
-        (DEPLOYMENT, *CAL_LOADS, "ant"),
-    )
-    cal = acq[acq.load.isin(CAL_LOADS)]
-    days: Dict[str, set] = {}
-    for load, t in zip(cal.load, cal.stamp_unix):
-        days.setdefault(_stamp(t, "%Y_%j"), set()).add(load)
-    calibration = sorted(d for d, loads in days.items() if len(loads) == len(CAL_LOADS))
-
-    ant = acq[acq.load == "ant"]
-    raw = sorted(
-        os.path.basename(p)[: -len("_ant.acq")]
-        for p in ant.relpath
-        if p.endswith("_ant.acq")
-    )
-    return {"calibration": calibration, "s11": _s11_stems(cat), "raw": raw}
-
-
-def _s11_sessions(cat: Any):
-    """Full averaged S11 sessions at the root of the tree, with their stems."""
+def _s11_sessions(cat: Any, kinds: Tuple[str, ...] = ("full",)):
+    """Averaged S11 sessions (``kinds``: ``full`` and/or ``antenna``) at the root
+    of the tree, with their file-name stems."""
     df = cat.sql(
-        "SELECT s.id, s.stamp_unix, vf.relpath FROM s11_session s"
+        "SELECT s.id, s.kind, s.stamp_unix, vf.relpath FROM s11_session s"
         " JOIN s11_session_file sf ON sf.session_id = s.id"
         " JOIN v_file vf ON vf.id = sf.file_id"
-        " WHERE s.kind = 'full' AND s.source = 'averaged' AND sf.label = 'O'"
-        " AND vf.deployment = ? AND vf.status = 'present'"
+        f" WHERE s.kind IN ({','.join('?' * len(kinds))}) AND s.source = 'averaged'"
+        " AND sf.label = 'O' AND vf.deployment = ? AND vf.status = 'present'"
         " AND vf.relpath NOT LIKE '%/%' ORDER BY s.stamp_unix",
-        (DEPLOYMENT,),
+        (*kinds, DEPLOYMENT),
     )
     df["stem"] = [p[: -len("_O.s1p")] for p in df.relpath]
     return df
 
 
-def _s11_stems(cat: Any) -> List[str]:
-    return sorted(set(_s11_sessions(cat).stem))
+def _session_files(cat: Any, sessions, stem: str, what: str) -> Dict[str, str]:
+    match = sessions[sessions.stem == stem]
+    if match.empty:
+        raise InputError(f"No {what} S11 session {stem!r} in the catalog")
+    s11 = cat.s11_files(int(match.id.iloc[-1]))
+    return dict(zip(s11.label, s11.path))
+
+
+def _check_root(files: Dict[str, str], root: str, what: str) -> List[str]:
+    off_root = [p for p in files.values() if os.path.dirname(p) != root.rstrip("/")]
+    if not off_root:
+        return []
+    # alancal_edges3 and the antenna S11 read <root>/<stem>_*.s1p
+    return [
+        f"{len(off_root)} {what} S11 files are not in the spectra root {root};"
+        " the calibration reads the copies there"
+    ]
 
 
 # ---------------------------------------------------------------------------
-# Date resolution
+# File versions and temperatures
 # ---------------------------------------------------------------------------
-def resolve_dates(
-    cat: Any, dates: Dict[str, str], available: Dict[str, List[str]]
-) -> Dict[str, str]:
-    """Resolve ``{"cal", "s11", "raw"}`` choices (``"Latest"`` or a value)."""
-    out: Dict[str, str] = {}
-    for key, list_key in (("cal", "calibration"), ("raw", "raw")):
-        v = dates.get(key) or LATEST
-        choices = available.get(list_key, [])
-        if v == LATEST:
-            if not choices:
-                raise InputError(f"No {list_key} dates available")
-            v = (_latest_complete_raw(cat) if key == "raw" else None) or choices[-1]
-        elif v not in choices:
-            raise InputError(f"Unknown {list_key} date: {v!r}")
-        out[key] = v
-    v = dates.get("s11") or LATEST
-    if v == LATEST:
-        v = recommended_s11(cat, out["cal"])
-        if v is None or v not in available.get("s11", []):
-            raise InputError(
-                f"No usable full S11 session near calibration day {out['cal']}:"
-                " choose one explicitly"
-            )
-    elif v not in available.get("s11", []):
-        raise InputError(f"Unknown s11 date: {v!r}")
-    out["s11"] = v
-    return out
-
-
-def _latest_complete_raw(cat: Any) -> Optional[str]:
-    """The latest *finished* antenna spectrum with at least ``MIN_LATEST_RAW_CYCLES``.
-
-    Finished means a later antenna file exists (FASTSPEC had moved on when the
-    catalog was updated), so the file was not still being written.
-    """
-    df = cat.sql(
-        "SELECT relpath FROM v_spectra WHERE load = 'ant' AND status = 'present'"
-        " AND category = 'science' AND deployment = ? AND n_cycles >= ?"
-        " AND t_start_unix < (SELECT max(t_start_unix) FROM v_spectra WHERE"
-        " load = 'ant' AND status = 'present' AND deployment = ?)"
-        " ORDER BY t_start_unix DESC LIMIT 1",
-        (DEPLOYMENT, MIN_LATEST_RAW_CYCLES, DEPLOYMENT),
-    )
-    if df.empty:
-        return None
-    return os.path.basename(df.relpath.iloc[0])[: -len("_ant.acq")]
-
-
-def recommended_s11(cat: Any, cal_date: str) -> Optional[str]:
-    """Stem of the S11 session ``Catalog.calibration_inputs`` picks for a day."""
-    ci = cat.calibration_inputs(cal_date, deployment=DEPLOYMENT)
-    files = (ci.get("s11") or {}).get("files") or {}
-    o = files.get("O")
-    return os.path.basename(o)[: -len("_O.s1p")] if o else None
-
-
-# ---------------------------------------------------------------------------
-# Inputs of one run
-# ---------------------------------------------------------------------------
-def _file_times(cat: Any, paths: List[str]) -> Dict[str, Dict[str, Optional[float]]]:
-    """``path -> {stamp_unix, t_start_unix}`` (file-name stamp, first cycle)."""
-    if not paths:
-        return {}
-    marks = ",".join("?" * len(paths))
-    df = cat.sql(
-        "SELECT f.path, f.stamp_unix, s.t_start_unix FROM v_file f"
-        " LEFT JOIN v_spectra s ON s.path = f.path"
-        f" WHERE f.path IN ({marks})",
-        tuple(paths),
-    )
-    return {
-        r.path: {
-            "stamp_unix": float(r.stamp_unix),
-            "t_start_unix": None if r.t_start_unix != r.t_start_unix or r.t_start_unix is None
-            else float(r.t_start_unix),
-        }
-        for r in df.itertuples()
-    }
-
-
-def _file_versions(cat: Any, files: Dict[str, Any]) -> Dict[str, Any]:
+def _file_versions(cat: Any, paths: List[str]) -> Dict[str, Any]:
     """Version of every input: catalog sha256 and live size/mtime (dedup key)."""
-    paths = [p for k, p in files.items() if k != "s11" and p] + list(files["s11"].values())
+    paths = [p for p in paths if p]
     if not paths:
         return {}
     df = cat.sql(
-        f"SELECT path, size, sha256 FROM v_file WHERE path IN ({','.join('?' * len(paths))})",
+        f"SELECT path, sha256 FROM v_file WHERE path IN ({','.join('?' * len(paths))})",
         tuple(paths),
     )
     out: Dict[str, Any] = {}
@@ -215,6 +130,23 @@ def _file_versions(cat: Any, files: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _file_times(cat: Any, paths: List[str]) -> Dict[str, Dict[str, Optional[float]]]:
+    """``path -> {stamp_unix, t_start_unix}`` (file-name stamp, first cycle)."""
+    paths = [p for p in paths if p]
+    if not paths:
+        return {}
+    df = cat.sql(
+        "SELECT f.path, f.stamp_unix, s.t_start_unix FROM v_file f"
+        " LEFT JOIN v_spectra s ON s.path = f.path"
+        f" WHERE f.path IN ({','.join('?' * len(paths))})",
+        tuple(paths),
+    )
+    return {
+        r.path: {"stamp_unix": float(r.stamp_unix), "t_start_unix": _nan_to_none(r.t_start_unix)}
+        for r in df.itertuples()
+    }
+
+
 def probe_temperature(
     cat: Any,
     *,
@@ -222,7 +154,6 @@ def probe_temperature(
     context: str,
     stamp_unix: float,
     t_unix: float,
-    label: str,
     default_k: float,
 ) -> Dict[str, Any]:
     """Probe reading for one spectrum: snapshot, else nearest log reading, else default."""
@@ -264,88 +195,229 @@ def probe_temperature(
     return entry
 
 
-def resolve_inputs(cat: Any, resolved: Dict[str, str]) -> Dict[str, Any]:
-    """Files, temperatures and issues for one run (``resolved`` from :func:`resolve_dates`)."""
-    cal_date, s11_stem, raw = resolved["cal"], resolved["s11"], resolved["raw"]
-    ci = cat.calibration_inputs(cal_date, deployment=DEPLOYMENT)
-    issues: List[str] = list(ci["issues"])
-    files: Dict[str, Any] = {}
-    for load in CAL_LOADS:
-        paths = ci["spectra"].get(load) or []
-        files[load] = paths[0] if paths else None
-
-    name = f"/{raw}_ant.acq"
-    ant = cat.sql(
-        "SELECT path FROM v_file WHERE kind = 'acq' AND load = 'ant'"
-        " AND status = 'present' AND category = 'science' AND deployment = ?"
-        " AND substr(relpath, -length(?)) = ? ORDER BY relpath",
-        (DEPLOYMENT, name, name),
-    )
-    if ant.empty:
-        raise InputError(f"No antenna spectrum {raw!r} in the catalog")
-    files["ant"] = str(ant.path.iloc[0])
-
-    sessions = _s11_sessions(cat)
-    match = sessions[sessions.stem == s11_stem]
-    if match.empty:
-        raise InputError(f"No full S11 session {s11_stem!r} in the catalog")
-    s11 = cat.s11_files(int(match.id.iloc[-1]))
-    files["s11"] = dict(zip(s11.label, s11.path))
-    suggested = recommended_s11(cat, cal_date)
-    if suggested != s11_stem:
-        # the catalog's S11 remarks are about its own pick, not this one
-        issues = [i for i in issues if not i.startswith("no full S11 session")]
-        issues.append(
-            f"S11 session {s11_stem} chosen; the catalog recommends"
-            f" {suggested or 'none'} for calibration day {cal_date}"
-        )
-    root = ci.get("root") or str(config.RAW_DATA_ROOT)
-    off_root = [p for p in files["s11"].values() if os.path.dirname(p) != root.rstrip("/")]
-    if off_root:
-        # alancal_edges3 and the antenna S11 read <root>/<stem>_*.s1p
-        issues.append(
-            f"{len(off_root)} S11 files are not in the spectra root {root};"
-            " the calibration reads the copies there"
-        )
-
-    times = _file_times(cat, [p for p in (files.get("amb"), files.get("hot"), files["ant"]) if p])
+def _temperatures(
+    cat: Any, lookups: List[Tuple[str, Optional[str], str, float, float]], issues: List[str]
+) -> Dict[str, Any]:
+    """``lookups``: (name, spectrum path, snapshot context, probe, fallback K)."""
+    times = _file_times(cat, [p for _, p, *_ in lookups])
     temps: Dict[str, Any] = {}
-    # (display, spectrum, snapshot context, probe, default)
-    lookups = [
-        ("ambient", files.get("amb"), "amb", config.PROBE_AMBIENT, config.TCOLD_FALLBACK_K),
-        ("hot", files.get("hot"), "hot", config.PROBE_HOT, config.THOT_FALLBACK_K),
-        ("lna", files["ant"], "ant", config.PROBE_LNA, config.TCAB_FALLBACK_K),
-        # the ambient probe at the observation time (the "actual" temperature)
-        ("obs_ambient", files["ant"], "ant", config.PROBE_AMBIENT, config.TCOLD_FALLBACK_K),
-    ]
-    for display, path, context, probe, default_k in lookups:
+    for name, path, context, probe, default_k in lookups:
         ft = times.get(path) if path else None
         if ft is None:
-            temps[display] = {
+            e = {
                 "probe": probe, "time": None, "reading_time": None, "source": "default",
                 "temperature_k": default_k, "temperature_c": default_k - 273.15,
             }
         else:
             t = ft["t_start_unix"] if ft["t_start_unix"] is not None else ft["stamp_unix"]
-            temps[display] = probe_temperature(
+            e = probe_temperature(
                 cat, probe=probe, context=context, stamp_unix=ft["stamp_unix"],
-                t_unix=t, label=display, default_k=default_k,
+                t_unix=t, default_k=default_k,
             )
-        e = temps[display]
         if e["source"] == "default":
+            where = os.path.basename(path) if path else "its spectrum"
             issues.append(
-                f"no {display} temperature (probe {int(probe)}) within "
-                f"{TEMPLOG_TOLERANCE_S // 60} min of {e['time'] or 'its spectrum'}:"
-                f" using the fallback {default_k:.2f} K"
+                f"no {name} temperature (probe {int(probe)}) within "
+                f"{TEMPLOG_TOLERANCE_S // 60} min of {where}: using the fallback"
+                f" {default_k:.2f} K"
             )
+        temps[name] = e
+    return temps
 
+
+# ---------------------------------------------------------------------------
+# Calibrations
+# ---------------------------------------------------------------------------
+def calibration_days(cat: Any) -> List[str]:
+    """UTC days (``YYYY_DDD``) on which all four calibration loads start."""
+    df = cat.sql(
+        "SELECT load, stamp_unix FROM v_file WHERE kind = 'acq' AND status = 'present'"
+        " AND category = 'science' AND deployment = ?"
+        f" AND load IN ({','.join('?' * len(CAL_LOADS))})",
+        (DEPLOYMENT, *CAL_LOADS),
+    )
+    days: Dict[str, set] = {}
+    for load, t in zip(df.load, df.stamp_unix):
+        days.setdefault(_stamp(t, "%Y_%j"), set()).add(load)
+    return sorted(d for d, loads in days.items() if len(loads) == len(CAL_LOADS))
+
+
+def calibration_options(cat: Any) -> Dict[str, List[str]]:
+    """What the Calibrations tab offers (sorted, oldest first)."""
+    return {"calibration": calibration_days(cat), "s11": sorted(set(_s11_sessions(cat).stem))}
+
+
+def recommended_s11(cat: Any, cal_date: str) -> Optional[str]:
+    """Stem of the S11 session ``Catalog.calibration_inputs`` picks for a day."""
+    ci = cat.calibration_inputs(cal_date, deployment=DEPLOYMENT)
+    o = ((ci.get("s11") or {}).get("files") or {}).get("O")
+    return os.path.basename(o)[: -len("_O.s1p")] if o else None
+
+
+def resolve_calibration(cat: Any, cal: str = LATEST, s11: str = LATEST) -> Dict[str, Any]:
+    """Inputs of one receiver calibration (``cal``: ``YYYY_DDD``; ``s11``: stem)."""
+    opts = calibration_options(cat)
+    if cal in (None, "", LATEST):
+        if not opts["calibration"]:
+            raise InputError("No calibration days available")
+        cal = opts["calibration"][-1]
+    elif cal not in opts["calibration"]:
+        raise InputError(f"Unknown calibration day: {cal!r}")
+    suggested = recommended_s11(cat, cal)
+    if s11 in (None, "", LATEST):
+        if suggested is None or suggested not in opts["s11"]:
+            raise InputError(
+                f"No usable full S11 session near calibration day {cal}: choose one explicitly"
+            )
+        s11 = suggested
+    elif s11 not in opts["s11"]:
+        raise InputError(f"Unknown S11 session: {s11!r}")
+
+    ci = cat.calibration_inputs(cal, deployment=DEPLOYMENT)
+    issues: List[str] = list(ci["issues"])
+    if suggested != s11:
+        # the catalog's S11 remarks are about its own pick, not this one
+        issues = [i for i in issues if not i.startswith("no full S11 session")]
+        issues.append(
+            f"S11 session {s11} chosen; the catalog recommends {suggested or 'none'}"
+            f" for calibration day {cal}"
+        )
+    files: Dict[str, Any] = {}
+    for load in CAL_LOADS:
+        paths = ci["spectra"].get(load) or []
+        files[load] = paths[0] if paths else None
+    files["s11"] = _session_files(cat, _s11_sessions(cat), s11, "full")
+    root = ci.get("root") or str(config.RAW_DATA_ROOT)
+    issues += _check_root(files["s11"], root, "calibration")
+    temps = _temperatures(cat, [
+        ("ambient", files["amb"], "amb", config.PROBE_AMBIENT, config.TCOLD_FALLBACK_K),
+        ("hot", files["hot"], "hot", config.PROBE_HOT, config.THOT_FALLBACK_K),
+    ], issues)
     return {
-        "dates": dict(resolved),
+        "kind": "calibration",
+        "dates": {"cal": cal, "s11": s11},
         "root": root,
         "files": files,
-        "file_versions": _file_versions(cat, files),
+        "file_versions": _file_versions(
+            cat, [files[k] for k in CAL_LOADS] + list(files["s11"].values())
+        ),
         "temperatures": temps,
         "hk_coverage": ci.get("hk_coverage"),
         "recommended_s11": suggested,
+        "issues": issues,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Observations (nights)
+# ---------------------------------------------------------------------------
+def _night_dates_of(t0: float, t1: float) -> List[str]:
+    """Nights (local evening dates) that the interval ``[t0, t1]`` overlaps."""
+    out = []
+    start, _ = products_api.Products.night(float(t0), deployment=DEPLOYMENT)
+    if start > t0:  # an afternoon instant: the night that starts this evening
+        start -= 86400
+    s = start
+    while s <= t1:
+        if t0 < s + 12 * 3600:
+            out.append(products_api._night_date(s))
+        s += 86400
+    return out
+
+
+def observation_options(cat: Any) -> Dict[str, List[str]]:
+    """Nights with antenna spectra, and antenna S11 sessions (sorted, oldest first)."""
+    sp = cat.sql(
+        "SELECT t_start_unix, t_end_unix FROM v_spectra WHERE load = 'ant'"
+        " AND status = 'present' AND category = 'science' AND deployment = ?"
+        " AND t_start_unix IS NOT NULL AND t_end_unix IS NOT NULL",
+        (DEPLOYMENT,),
+    )
+    nights = set()
+    for t0, t1 in zip(sp.t_start_unix, sp.t_end_unix):
+        nights.update(_night_dates_of(float(t0), float(t1)))
+    stems = sorted(set(_s11_sessions(cat, ("full", "antenna")).stem))
+    return {"nights": sorted(nights), "antenna_s11": stems}
+
+
+def recommended_ant_s11(cat: Any, night_start: float) -> Optional[str]:
+    """The antenna S11 session nearest before the night's end (else the first after)."""
+    sessions = _s11_sessions(cat, ("full", "antenna"))
+    if sessions.empty:
+        return None
+    before = sessions[sessions.stamp_unix <= night_start + 12 * 3600]
+    best = before.iloc[-1] if len(before) else sessions.iloc[0]
+    return str(best.stem)
+
+
+def resolve_observation(cat: Any, night: str = LATEST, ant_s11: str = LATEST) -> Dict[str, Any]:
+    """Inputs of one night's observation (``night``: local evening date YYYY-MM-DD)."""
+    opts = observation_options(cat)
+    if night in (None, "", LATEST):
+        if not opts["nights"]:
+            raise InputError("No nights with antenna data")
+        night = opts["nights"][-1]
+    elif night not in opts["nights"]:
+        raise InputError(f"No antenna data for the night of {night!r}")
+    start, end = products_api.Products.night(date.fromisoformat(night), deployment=DEPLOYMENT)
+
+    issues: List[str] = []
+    sp = cat.sql(
+        "SELECT path, t_start_unix, t_end_unix, n_cycles FROM v_spectra"
+        " WHERE load = 'ant' AND status = 'present' AND category = 'science'"
+        " AND deployment = ? AND t_end_unix >= ? AND t_start_unix < ?"
+        " ORDER BY t_start_unix",
+        (DEPLOYMENT, start, end),
+    )
+    if sp.empty:
+        raise InputError(f"No antenna spectra in the night of {night}")
+
+    suggested = recommended_ant_s11(cat, start)
+    if ant_s11 in (None, "", LATEST):
+        if suggested is None:
+            raise InputError("No antenna S11 session in the catalog")
+        ant_s11 = suggested
+    elif ant_s11 not in opts["antenna_s11"]:
+        raise InputError(f"Unknown antenna S11 session: {ant_s11!r}")
+    sessions = _s11_sessions(cat, ("full", "antenna"))
+    s11_files = _session_files(cat, sessions, ant_s11, "antenna")
+    missing = [lab for lab in ("ant", "O", "S", "L") if lab not in s11_files]
+    if missing:
+        raise InputError(f"S11 session {ant_s11} lacks {', '.join(missing)}")
+    s11_stamp = float(sessions[sessions.stem == ant_s11].stamp_unix.iloc[-1])
+    days = abs(s11_stamp - start) / 86400
+    if days > ANT_S11_WARN_DAYS:
+        issues.append(f"antenna S11 session {ant_s11} is {days:.0f} days from the night")
+    if ant_s11 != suggested:
+        issues.append(
+            f"antenna S11 session {ant_s11} chosen; the nearest before the night is {suggested}"
+        )
+
+    ant_files = []
+    for r in sp.itertuples():
+        f_issues: List[str] = []
+        temps = _temperatures(cat, [
+            ("lna", r.path, "ant", config.PROBE_LNA, config.TCAB_FALLBACK_K),
+            ("obs_ambient", r.path, "ant", config.PROBE_AMBIENT, config.TCOLD_FALLBACK_K),
+        ], f_issues)
+        issues += [i for i in f_issues if i.startswith("no lna")]
+        ant_files.append({
+            "path": r.path,
+            "name": os.path.basename(r.path),
+            "t_start_unix": _nan_to_none(r.t_start_unix),
+            "t_end_unix": _nan_to_none(r.t_end_unix),
+            "n_cycles": _nan_to_none(r.n_cycles),
+            "temperatures": temps,
+        })
+    return {
+        "kind": "observation",
+        "night": {"date": night, "start_unix": start, "end_unix": end},
+        "dates": {"night": night, "ant_s11": ant_s11},
+        "root": os.path.dirname(s11_files["O"]),
+        "files": {"ant": ant_files, "ant_s11": s11_files},
+        "file_versions": _file_versions(
+            cat, [f["path"] for f in ant_files] + list(s11_files.values())
+        ),
+        "recommended_ant_s11": suggested,
         "issues": issues,
     }

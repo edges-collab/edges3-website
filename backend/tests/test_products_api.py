@@ -235,7 +235,7 @@ def test_backend_app_routes(settings, tmp_path, monkeypatch):
 
     monkeypatch.setenv("EDGES_OUTPUT_ROOT", str(tmp_path / "outputs"))
     monkeypatch.setenv("EDGES_RAW_DATA_ROOT", str(tmp_path / "no-raw-data"))
-    for m in ("config", "scan_dates", "backend_api"):
+    for m in ("config", "backend_api"):
         sys.modules.pop(m, None)
     try:
         backend_api = importlib.import_module("backend_api")
@@ -246,5 +246,5 @@ def test_backend_app_routes(settings, tmp_path, monkeypatch):
         assert client.get("/api/nope").status_code == 404
     finally:
         products_api.configure(None)
-        for m in ("config", "scan_dates", "backend_api"):
+        for m in ("config", "backend_api"):
             sys.modules.pop(m, None)
