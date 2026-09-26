@@ -23,6 +23,10 @@ function NavBar() {
 
         <div className="d-flex gap-2">
 
+        <Link to="/" className="btn btn-primary nav-button">
+            Last night
+        </Link>
+
         <Link to="/Select" className="btn btn-primary nav-button">
             Select
         </Link>
@@ -37,6 +41,10 @@ function NavBar() {
 
         <Link to="/CalibratedData" className="btn btn-primary nav-button">
            Calibrated Data
+        </Link>
+
+        <Link to="/Status" className="btn btn-primary nav-button">
+           Status
         </Link>
 
         </div>

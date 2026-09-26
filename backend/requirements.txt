@@ -30,3 +30,8 @@ matplotlib>=3.8
 astropy>=6.0
 h5py>=3.10
 hickle>=5.0
+
+# Optional, not on PyPI yet — needed only for the "Last night" page and
+# /api/* (see README, "catalog and pipeline products"):
+#   uv pip install "edges-catalog @ git+file:///path/to/edges-catalog" \
+#                  "edges-pipeline @ git+file:///path/to/edges-pipeline"

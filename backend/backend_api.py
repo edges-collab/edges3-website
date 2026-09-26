@@ -11,6 +11,7 @@ POST /run_pipeline           Trigger a user-run with custom dates / parameters
 POST /save_outputs           Bundle the current outputs into a downloadable zip
 GET  /download/<name>        Download a previously saved zip
 GET  /health                 Liveness probe
+GET  /api/...                Read-only catalog/products endpoints (see products_api.py)
 
 Static files
 ------------
@@ -53,6 +54,7 @@ from pydantic import BaseModel, Field
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
+import products_api  # noqa: E402
 import scan_dates  # noqa: E402
 from io_utils import compute_run_hash  # noqa: E402
 
@@ -560,6 +562,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Read-only /api/* endpoints over the catalog and pipeline products
+# (the "Last night" page). They work only when edges-catalog and
+# edges-pipeline are installed; otherwise they return 503.
+app.include_router(products_api.router)
+
 
 @app.on_event("startup")
 def _startup() -> None:
@@ -724,6 +731,9 @@ async def spa_fallback(full_path: str):
         if FRONTEND_DIST.resolve() in candidate.parents and candidate.is_file():
             return FileResponse(candidate)
     last_segment = full_path.rsplit("/", 1)[-1]
+    # Unknown API paths get a JSON 404, never the SPA's index.html.
+    if full_path == "api" or full_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="Not found")
     if _LOOKS_LIKE_FILE.match(last_segment):
         raise HTTPException(status_code=404, detail="Not found")
     index = FRONTEND_DIST / "index.html"

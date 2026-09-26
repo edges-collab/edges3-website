@@ -56,6 +56,28 @@ Verify the install:
 python backend/config.py    # prints every resolved path + probe number
 ```
 
+### 2b. Optional — catalog and pipeline products ("Last night" page)
+
+The **Last night** page (the home page, `/`) and the read-only `/api/*`
+endpoints read precomputed quick-look (QL) and L1 QA products and the
+data catalog through two packages that are **not published yet**:
+`edges-catalog` and `edges-pipeline`. They are local git repositories
+on the EDGES server (ask the data maintainers for their location);
+install them pinned to their committed code (not editable):
+
+```bash
+uv pip install \
+  "edges-catalog @ git+file:///path/to/edges-catalog" \
+  "edges-pipeline @ git+file:///path/to/edges-pipeline"
+```
+
+Without them the rest of the site works as before and `/api/*` returns
+503 with an install hint. The products and the catalog live under
+`EDGES_PIPELINE_ROOT` (default `/data6/edges/edges-db`); run the backend
+as a member of the `loco` group, since the SQLite (WAL) databases need
+their group-writable `-wal`/`-shm` files even for read-only access.
+These endpoints never read the raw data tree.
+
 ### 3. Install the frontend
 
 ```bash
@@ -171,6 +193,19 @@ slow SSH tunnel — only use it when you're iterating on UI code.
 
 ## What you do in the UI
 
+The home page, **Last night**, shows the most recent MRO night
+(18:00–06:00 AWST) from the precomputed products: a Q (or log p0)
+waterfall against site time with LST on the top axis, band-median Q and
+band power (L1), housekeeping (ambient load, front end, inner box, hot
+load, battery), ADC full-scale/data-drop events, and a per-file QA table
+with badges. **Previous/Next** and the date picker choose other nights
+(`/?date=YYYY-MM-DD`, named by the local date of the evening). Quick-look
+products cover only the last ~30 days by default; older nights show the
+L1 and housekeeping strips without a waterfall. The badge thresholds are
+provisional (see `QA_THRESHOLDS` in `backend/products_api.py`).
+
+To run a calibration:
+
 1. Go to **Select**.
 2. Pick dates (defaults to "Latest" for all three) and parameters (40–190
    MHz, 6 cterms, 5 wterms, no 2D by default).
@@ -196,6 +231,8 @@ the top of any data page; the resulting zip lives at
 | `backend/config.py` | All env-driven paths and tunable defaults (single source of truth) |
 | `backend/backend_api.py` | FastAPI app — REST endpoints + static-file mount |
 | `backend/run_single_day.py` | The actual EDGES calibration + temperature pipeline |
+| `backend/products_api.py` | Read-only `/api/*` endpoints over the catalog and pipeline products (Last night page) |
+| `backend/tests/` | pytest tests of `/api/*` on a small synthetic catalog |
 | `backend/scan_dates.py` | Scans the raw-data tree and writes `available_dates.json` |
 | `backend/io_utils.py` | Shared dataclasses (`Plot`), hashing, manifest writing |
 | `backend/requirements.txt` | Every Python dep, installed via `uv pip install` |
@@ -221,6 +258,7 @@ launching the backend.
 | `EDGES_TEMP_LOG_FILE` | `$EDGES_RAW_DATA_ROOT/temperature_logger/temperature.log` | Single-file temperature log (legacy) |
 | `EDGES_TEMP_LOG_DIR` | `$EDGES_TEMP_LOG_FILE`'s parent | Directory of log files; every `*.log`, `*.backup`, and `*.txt` in here is read and merged into one timeline |
 | `EDGES_BEAM_FACTOR_FILE` | `/data4/vydula/edges/packages/edges3-data-analysis/data/e3_beam_factor.hickle` (canonical; falls back to `<RAW_DATA_ROOT>/../../../e3_beam_factor.hickle` then `/mnt/data5/...`, `/scratch/...`, `$HOME/edges/...`) | Path to the EDGES-3 antenna beam factor file. Required for the absolute temperature calibration; the canonical path ships with the `edges-3-data-analysis` package. Set this explicitly only if the file lives somewhere else. |
+| `EDGES_PIPELINE_ROOT` | `/data6/edges/edges-db` | Where the catalog (`catalog.sqlite`), products database (`products.sqlite`) and QL/L1 products live (read by `/api/*`; read only) |
 | `EDGES_PYTHON` | current interpreter (`sys.executable`) | Python the backend shells out to when running the pipeline |
 | `EDGES_PROBE_AMBIENT` | `100` | Temperature-log probe for ambient cal |
 | `EDGES_PROBE_HOT` | `102` | Temperature-log probe for hot cal |
@@ -315,6 +353,18 @@ For a given `(cal_date, s11_date, spec_date)` triple the pipeline runs:
 ---
 
 ## Development workflow
+
+### Tests of the `/api/*` endpoints
+
+They build a tiny synthetic field mirror in a temporary directory, ingest
+it with `edges-catalog` and run the `edges-pipeline` QL and L1 stages on
+it (they are skipped if those packages are not installed):
+
+```bash
+uv pip install pytest httpx
+cd backend
+python -m pytest tests
+```
 
 ### Running the pipeline manually
 

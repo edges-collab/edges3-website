@@ -21,6 +21,7 @@ export default defineConfig({
   ],
   server: {
     proxy: {
+      '/api':             { target: `http://127.0.0.1:${BACKEND_PORT}`, changeOrigin: false },
       '/health':           { target: `http://127.0.0.1:${BACKEND_PORT}`, changeOrigin: false },
       '/latest_run':       { target: `http://127.0.0.1:${BACKEND_PORT}`, changeOrigin: false },
       '/available_dates':  { target: `http://127.0.0.1:${BACKEND_PORT}`, changeOrigin: false },
