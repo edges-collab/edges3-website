@@ -7,7 +7,8 @@ stages on it, as ``edges-pipeline/tests/test_l1.py`` does.
 The night of 2025-04-10 at the MRO (18:00-06:00 AWST = 10:00-22:00 UTC) has:
 
 - ``A`` 10:30 UTC, 40 cycles, one cycle at ADC full scale;
-- ``B`` 12:00 UTC, 40 cycles (a ~1 h gap after ``A``);
+- ``B`` 12:00 UTC, 40 cycles (a ~1 h gap after ``A``), cycle 7 an antenna
+  dropout (p0 below p1, so Q < 0);
 - ``C`` 13:00 UTC, 10 cycles (a short file);
 - ``bad`` 14:00 UTC, NUL-padded (read_acq cannot decode it: no products);
 - ``day`` 2025-04-11 05:00 UTC (13:00 AWST), 5 cycles: daytime data after
@@ -52,7 +53,9 @@ def _acq_name(t: datetime) -> str:
     return f"{t.year}_{t.timetuple().tm_yday:03d}_{t:%H_%M_%S}_ant.acq"
 
 
-def write_acq(root: Path, start: datetime, ncycles: int, seed: int = 0, clip_cycle=None) -> Path:
+def write_acq(
+    root: Path, start: datetime, ncycles: int, seed: int = 0, clip_cycle=None, dropout_cycle=None
+) -> Path:
     from read_acq import encode
 
     rng = np.random.default_rng(seed)
@@ -60,6 +63,8 @@ def write_acq(root: Path, start: datetime, ncycles: int, seed: int = 0, clip_cyc
     p1 = np.tile((1 + f / 200) * 1e-9, (ncycles, 1))
     p2 = p1 * 2
     p0 = p1 * (1.5 + 0.01 * rng.standard_normal((ncycles, NFREQ)))
+    if dropout_cycle is not None:
+        p0[dropout_cycle] = p1[dropout_cycle] * 0.5
     t = [start + timedelta(seconds=CYCLE_S * i) for i in range(ncycles)]
     times = np.array([[f"{x.year}:{x.timetuple().tm_yday:03d}:{x:%H:%M:%S}"] * 3 for x in t])
     adcmax = np.full((ncycles, 3), 0.25)
@@ -99,7 +104,7 @@ def build_env(tmp: Path):
 
     root = tmp / "MRO"
     good = write_acq(root, T_A, 40, clip_cycle=5)
-    write_acq(root, T_B, 40, seed=1)
+    write_acq(root, T_B, 40, seed=1, dropout_cycle=7)
     write_acq(root, T_C, 10, seed=2)
     write_acq(root, T_DAY, 5, seed=3)
     src = good.read_bytes()

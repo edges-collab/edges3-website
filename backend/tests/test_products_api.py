@@ -32,15 +32,12 @@ def test_insert_gaps():
     assert len(t3) == 4
 
 
-def test_decimate_segments_respects_gaps():
-    t = np.array([0.0, 10, 20, 30, 40, 1000, 1010, 1020])
-    lst = np.array([23.9, 23.95, 0.0, 0.05, 0.1, 5.0, 5.05, 5.1])
-    t2, cols = products_api.decimate_segments(t, {"lst_hour": lst, "x": t}, 2)
-    # groups stay within [0..40] and [1000..1020]
-    assert list(t2) == [5, 25, 40, 1005, 1020]
-    assert list(cols["x"]) == [5, 25, 40, 1005, 1020]
-    assert cols["lst_hour"][0] == pytest.approx(23.925)  # circular mean
-    assert cols["lst_hour"][1] == pytest.approx(0.025)
+def test_insert_gaps_at_segments():
+    t = np.array([0.0, 10, 20, 30, 40, 50])
+    seg = np.array([0, 0, 0, 1, 1, 1])  # e.g. Products.quicklook()["segment"]
+    t2, cols = products_api.insert_gaps(t, {"x": t}, segment=seg)
+    assert len(t2) == 8 and np.isnan(cols["x"][3:5]).all()
+    assert t2[2] < t2[3] < t2[4] < t2[5]  # inserted rows stay between neighbours
 
 
 def test_badges_midnight_split():
@@ -66,8 +63,7 @@ def test_nights_latest(client):
     assert d["timezone"] == "AWST"
     assert d["end_unix"] - d["start_unix"] == 12 * 3600
     assert d["start_unix"] == T_A.replace(hour=10, minute=0).timestamp()  # 18:00 AWST
-    # the latest data (T_DAY, 13:00 AWST next day) is not in any night: the
-    # library's latest_night() gives the empty coming night; we step back
+    # the latest data (T_DAY, 13:00 AWST next day) is in no night
     assert T_DAY.timestamp() > d["end_unix"]
 
 
@@ -117,13 +113,22 @@ def test_night_payload(client):
     assert files[a]["n_adc_clip_cycles"] == 1 and "ADC full scale" in texts[a]
     assert files[a]["has_l1"] and files[a]["has_ql"]
     assert "short (10 cycles)" in texts[c]
-    assert texts[T_B.strftime("2025_100_%H_%M_%S_ant.acq")] == "ok"
     bad = T_BAD.strftime("2025_100_%H_%M_%S_ant.acq")
     # catalogued, but read_acq cannot decode it: shown as missing, not an error
     assert not files[bad]["has_l1"] and not files[bad]["has_ql"]
     assert "unreadable (no products)" in texts[bad]
     assert "ADC full scale: 1 cycle" in texts[a] and "1 cycles" not in texts[a]
     assert d["events"]["adc_clip_unix"] == [T_A.timestamp() + 5 * CYCLE_S]
+
+    # the antenna dropout (edges-database ISSUES #24): counted in the night,
+    # badged, and on the events strip
+    b = T_B.strftime("2025_100_%H_%M_%S_ant.acq")
+    assert files[b]["n_dropout_cycles"] == 1
+    assert files[b]["badges"][0] == {"level": "critical", "text": "antenna dropouts: 1 cycle"}
+    assert d["events"]["dropout_unix"] == [T_B.timestamp() + 7 * CYCLE_S]
+    assert d["dropouts"] == {"n_cycles": 1, "n_files": 1}
+    # window (in-night) columns from Products.l1(clip=True)
+    assert files[a]["n_cycles_window"] == 40
 
 
 def test_night_p0_and_cache(client):
@@ -146,9 +151,9 @@ def test_night_by_date_outside_coverage(client):
 def test_night_decimation(client):
     d = client.get("/api/night", params={"date": NIGHT, "max_rows": 30}).json()
     ql = d["quicklook"]
-    assert ql["decimation"] == 3 and ql["n_cycles"] == 90
-    # 40 + 40 + 10 cycles in three gap-free segments -> 14 + 14 + 4 rows
-    assert ql["n_rows"] == 32
+    # groups never straddle the gaps: 40 + 40 + 10 cycles in 3 segments
+    assert ql["n_segments"] == 3
+    assert ql["n_rows"] <= 30 and ql["decimation"] > 1
     wf = _decode(ql["waterfall_q"])
     t = np.array(ql["time_unix"], dtype=float)
     data_t = t[~np.isnan(wf).all(axis=1)]

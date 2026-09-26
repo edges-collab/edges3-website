@@ -33,8 +33,8 @@ export type Coverage = {
 export type QuickLook = {
   available: boolean
   reason: string | null
-  n_cycles: number
   n_rows: number // after decimation
+  n_segments?: number // contiguous runs of data (a new one after a gap)
   time_unix?: (number | null)[]
   lst_hour?: (number | null)[]
   freq_mhz?: (number | null)[]
@@ -66,23 +66,27 @@ export type HousekeepingSeries = {
   value: (number | null)[]
 }
 
-export type Badge = { level: "warn" | "info" | "ok"; text: string }
+export type Badge = { level: "critical" | "warn" | "info" | "ok"; text: string }
 
 export type FileQA = {
   file_id: number
   name: string
   t_start_unix: number | null
   t_end_unix: number | null
-  n_cycles: number | null
+  n_cycles: number | null // whole file
+  n_cycles_window: number | null // within the night
   has_l1: boolean
   has_ql: boolean
   total_data_drops: number | null
-  n_adc_clip_cycles: number
+  n_adc_clip_cycles: number // within the night
+  n_dropout_cycles: number | null // antenna dropouts within the night
   rfi_occupancy: number | null
-  n_outlier_cycles: number | null
+  rfi_whole_file: boolean // true: whole-file value (per-cycle RFI needs L1 v4)
+  n_outlier_cycles: number | null // within the night
   n_persistent_lines: number | null
   n_nonfinite: number | null
-  q_median: number | null
+  q_median: number | null // within the night, excluding dropouts
+  window_flags: string | null // "stored" | "recomputed" | "unreadable"
   badges: Badge[]
 }
 
@@ -92,7 +96,8 @@ export type NightPayload = {
   band: BandSeries | null
   housekeeping: { series: HousekeepingSeries[]; n_readings: number; gap_s: number } | null
   files: FileQA[]
-  events: { adc_clip_unix: number[]; data_drop_unix: number[] }
+  events: { dropout_unix: number[]; adc_clip_unix: number[]; data_drop_unix: number[] }
+  dropouts: { n_cycles: number; n_files: number }
   thresholds: Record<string, number>
   warnings: string[]
   generated_at: string

@@ -3,12 +3,13 @@
  * site-local time axis (zooming one zooms all):
  *
  *   waterfall (Q or log10 p0) vs frequency, with LST on the top axis
+ *   events                 (antenna dropouts from L1; ADC full-scale hits
+ *                           and data drops from the catalog)
  *   band-median Q          (L1)
  *   band power p0/p1/p2    (L1)
  *   load temperatures      (catalog housekeeping)
  *   hot load temperature
  *   battery voltage
- *   events                 (ADC full-scale hits, data drops; catalog)
  *
  * Each strip has its own y axis (no dual axes). Gaps arrive from the
  * backend as NaN rows / nulls, so nothing is interpolated across them.
@@ -22,6 +23,7 @@ import { decodeRows, lstTicks, robustRange, siteTimes, toSiteTime } from "../uti
 // Reference categorical slots 1-3 (validated all-pairs) and status colours.
 const SERIES = ["#2a78d6", "#eb6834", "#1baf7a"]
 const WARNING = "#fab219"
+const SERIOUS = "#ec835a"
 const CRITICAL = "#d03b3b"
 const GRID = "#e6e6e3"
 const MUTED = "#52514e"
@@ -51,12 +53,12 @@ export default function NightFigure({ data, quantity }: Props) {
 
   const strips: Strip[] = [
     { key: "wf", weight: 4, title: "Frequency [MHz]" },
+    { key: "events", weight: 0.6, title: "" },
     { key: "q", weight: 1, title: "Q" },
     { key: "power", weight: 1, title: "Power" },
     { key: "temps", weight: 1, title: "°C" },
     { key: "hot", weight: 0.8, title: "°C" },
     { key: "battery", weight: 0.8, title: hk.battery_voltage?.unit ?? "V" },
-    { key: "events", weight: 0.45, title: "" },
   ]
 
   // Stack strips top to bottom with a fixed gap between them.
@@ -67,7 +69,7 @@ export default function NightFigure({ data, quantity }: Props) {
   const layout: Partial<Layout> = {
     autosize: true,
     height: 1100,
-    margin: { l: 70, r: 150, t: 60, b: 50 },
+    margin: { l: 110, r: 150, t: 60, b: 50 },
     showlegend: true,
     legend: { orientation: "v", x: 1.02, xanchor: "left", yanchor: "top", font: { size: 11 } },
     hovermode: "closest",
@@ -94,7 +96,7 @@ export default function NightFigure({ data, quantity }: Props) {
   })
   // Legend below the waterfall's colour bar.
   ;(layout.legend as Record<string, unknown>).y = (L.yaxis as { domain: number[] }).domain[0] - gap
-  const lastY = axis.events
+  const lastY = axis.battery
   const x0 = toSiteTime(data.night.start_unix, off)
   const x1 = toSiteTime(data.night.end_unix, off)
   L.xaxis = {
@@ -196,16 +198,18 @@ export default function NightFigure({ data, quantity }: Props) {
   hkLine("battery_voltage", axis.battery, SERIES[0])
 
   // --- events (status colours, always labelled on the axis)
+  // Listed bottom-up on the category axis: dropouts on top, most prominent.
   const events: [string, number[], string][] = [
+    ["Data drops", data.events.data_drop_unix, SERIOUS],
     ["ADC full scale", data.events.adc_clip_unix, WARNING],
-    ["Data drops", data.events.data_drop_unix, CRITICAL],
+    ["Antenna dropouts", data.events.dropout_unix ?? [], CRITICAL],
   ]
   for (const [label, times, color] of events) {
     add({
       type: "scatter", mode: "markers", x: times.map((t) => toSiteTime(t, off)),
       y: times.map(() => label), xaxis: "x", yaxis: axis.events, name: `${label} (${times.length})`,
       marker: { symbol: "line-ns-open", size: 12, color, line: { width: 2, color } },
-      legendgroup: "ev", legendgrouptitle: label === "ADC full scale" ? { text: "Events" } : undefined,
+      legendgroup: "ev", legendgrouptitle: label === "Data drops" ? { text: "Events" } : undefined,
       hovertemplate: `%{x}<br>${label}<extra></extra>`,
     })
   }

@@ -84,13 +84,13 @@ QA_THRESHOLDS: Dict[str, float] = {
     "short_fraction": 0.8,
     # Intermittent-RFI flag fraction (L1 ``rfi_occupancy``) above this.
     "rfi_occupancy": 0.01,
-    # Cycles whose band-median Q deviates > 5 robust sigma (L1).
+    # Time-series outlier cycles within the night (L1).
     "outlier_cycles": 10,
 }
 
-#: A gap between consecutive samples longer than this many median steps is
-#: shown as a gap (files are ~1 min apart, cycles ~23 s: not gaps).
-GAP_FACTOR = 5.0
+#: For L1 per-cycle series: a step longer than this many median steps is a
+#: gap (as the QL ``segment`` rule in ``Products.quicklook``: 3 cycles).
+GAP_FACTOR = 3.0
 #: Housekeeping is logged every ~5 min; a longer silence is a gap.
 HOUSEKEEPING_GAP_S = 20 * 60
 
@@ -250,25 +250,36 @@ def _gap_positions(t: np.ndarray, max_gap: float) -> np.ndarray:
 
 
 def insert_gaps(
-    t: np.ndarray, columns: Dict[str, np.ndarray], factor: float = GAP_FACTOR
+    t: np.ndarray,
+    columns: Dict[str, np.ndarray],
+    segment: Optional[np.ndarray] = None,
+    factor: float = GAP_FACTOR,
 ) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
-    """Insert NaN rows at gaps longer than ``factor`` median steps.
+    """Insert NaN rows between data segments.
 
-    Two NaN rows go into each gap, one step after its start and one step
-    before its end, so heatmap cells next to a gap keep their normal width
-    and line plots break instead of joining across it.
+    Segments come from ``segment`` (per-row labels, as returned by
+    ``Products.quicklook``) or, without it, from steps longer than ``factor``
+    median steps. Two NaN rows go into each gap, one step after its start and
+    one step before its end, so heatmap cells next to a gap keep their normal
+    width and line plots break instead of joining across it.
     """
     t = np.asarray(t, dtype=float)
-    if len(t) < 3:
+    if len(t) < 2:
         return t, columns
     step = float(np.median(np.diff(t)))
     if not step > 0:
         return t, columns
-    gaps = _gap_positions(t, factor * step)
+    if segment is not None:
+        seg = np.asarray(segment)
+        gaps = np.nonzero(seg[1:] != seg[:-1])[0]
+    else:
+        gaps = _gap_positions(t, factor * step) if len(t) >= 3 else np.array([], int)
     if len(gaps) == 0:
         return t, columns
+    # never step past the neighbouring row (short gaps between decimated rows)
+    half = np.minimum(step, (t[gaps + 1] - t[gaps]) / 3)
     at = np.repeat(gaps + 1, 2)
-    t_new = np.insert(t, at, np.ravel(np.column_stack([t[gaps] + step, t[gaps + 1] - step])))
+    t_new = np.insert(t, at, np.ravel(np.column_stack([t[gaps] + half, t[gaps + 1] - half])))
     out = {}
     for k, v in columns.items():
         v = np.asarray(v, dtype=float)
@@ -298,20 +309,11 @@ def _night_info(start: float, end: float, latest: Optional[Tuple[float, float]])
 
 
 def _latest_night(prod: Any) -> Optional[Tuple[float, float]]:
-    """The latest night that has QL data.
-
-    ``Products.latest_night`` returns the night *containing* the latest data,
-    and puts any instant after local noon into the coming evening's night, so
-    daytime data (the instrument records all day) would select tonight's
-    still-empty night. Step back a night in that case.
-    """
+    """The most recent night that has QL data (``Products.latest_night``)."""
     try:
-        start, end = prod.latest_night(deployment=DEPLOYMENT)
+        return prod.latest_night(deployment=DEPLOYMENT)
     except LookupError:
         return None
-    if prod.ql_files(start, end, load="ant", deployment=DEPLOYMENT).empty:
-        start, end = start - 86400, end - 86400
-    return start, end
 
 
 # ---------------------------------------------------------------------------
@@ -360,54 +362,16 @@ def _data_version(prod: Any) -> Tuple:
 # ---------------------------------------------------------------------------
 # Payload builders
 # ---------------------------------------------------------------------------
-def _nanmean_groups(x: np.ndarray, n: int) -> np.ndarray:
-    """Mean over consecutive groups of ``n`` rows (NaN-aware; last group partial)."""
-    m = -(-len(x) // n)
-    pad = m * n - len(x)
-    if pad:
-        x = np.concatenate([x, np.full((pad, *x.shape[1:]), np.nan, x.dtype)])
-    with np.errstate(invalid="ignore"), warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
-        return np.nanmean(x.reshape(m, n, *x.shape[1:]), axis=1)
-
-
-def decimate_segments(
-    t: np.ndarray, columns: Dict[str, np.ndarray], n: int, factor: float = GAP_FACTOR
-) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
-    """Average groups of ``n`` rows *within* gap-free segments.
-
-    Groups never straddle a gap (which would put averaged rows inside it).
-    ``lst_hour`` is averaged on the circle, so the 24 -> 0 wrap is handled.
-    """
-    t = np.asarray(t, dtype=float)
-    if n <= 1 or len(t) == 0:
-        return t, columns
-    step = float(np.median(np.diff(t))) if len(t) > 1 else 0.0
-    cuts = _gap_positions(t, factor * step) + 1 if step > 0 else np.array([], int)
-    bounds = [0, *cuts.tolist(), len(t)]
-    t_out, out = [], {k: [] for k in columns}
-    for a, b in zip(bounds[:-1], bounds[1:]):
-        t_out.append(_nanmean_groups(t[a:b], n))
-        for k, v in columns.items():
-            v = np.asarray(v, dtype=float)[a:b]
-            if k == "lst_hour":
-                ang = v * (2 * np.pi / 24)
-                c, s = _nanmean_groups(np.cos(ang), n), _nanmean_groups(np.sin(ang), n)
-                out[k].append((np.arctan2(s, c) * 24 / (2 * np.pi)) % 24)
-            else:
-                out[k].append(_nanmean_groups(v, n))
-    return np.concatenate(t_out), {k: np.concatenate(v) for k, v in out.items()}
-
-
 def _quicklook(prod: Any, t0: float, t1: float, load: str, p0: bool, max_rows: int) -> Dict[str, Any]:
     quantities = ("waterfall_q", "waterfall_p0") if p0 else ("waterfall_q",)
     try:
-        # Decimate here, per gap-free segment, not in Products.quicklook().
+        # Decimation never averages across a gap; ``segment`` labels the runs.
         ql = prod.quicklook(
-            t0, t1, load=load, quantities=quantities, deployment=DEPLOYMENT
+            t0, t1, load=load, quantities=quantities, deployment=DEPLOYMENT,
+            max_rows=max_rows,
         )
     except LookupError as e:
-        return {"available": False, "reason": str(e), "n_rows": 0, "n_cycles": 0}
+        return {"available": False, "reason": str(e), "n_rows": 0}
     cov = ql["coverage"]
     n = len(ql["time_unix"])
     reason = None
@@ -417,66 +381,76 @@ def _quicklook(prod: Any, t0: float, t1: float, load: str, p0: bool, max_rows: i
             and cov["t_first_unix"] <= t1 and cov["t_last_unix"] >= t0
         )
         reason = "no data in this range" if processed else "not processed (outside QL coverage)"
-    dec = -(-n // max_rows) if n > max_rows else 1
-    t, cols = decimate_segments(
-        ql["time_unix"], {"lst_hour": ql["lst_hour"], **{q: ql[q] for q in quantities}}, dec
+    t, cols = insert_gaps(
+        ql["time_unix"],
+        {"lst_hour": ql["lst_hour"], **{q: ql[q] for q in quantities}},
+        segment=ql["segment"],
     )
-    n_rows = len(t)
-    t, cols = insert_gaps(t, cols)
     return {
         "available": n > 0,
         "reason": reason,
-        "n_cycles": n,
-        "n_rows": n_rows,
+        "n_rows": n,
+        "n_segments": int(ql["segment"][-1]) + 1 if n else 0,
         "time_unix": _float_list(t, 1),
         "lst_hour": _float_list(cols["lst_hour"], 5),
         "freq_mhz": _float_list(ql["freq_mhz"], 4),
         "freq_edges_mhz": _float_list(ql["freq_edges_mhz"], 4),
         "waterfall_q": _encode_f32(cols["waterfall_q"]) if n else None,
         "waterfall_p0": _encode_f32(cols["waterfall_p0"]) if n and p0 else None,
-        "decimation": dec,
+        "decimation": int(ql["decimation"]),
         "files": [os.path.basename(p) for p in ql["files"]],
         "missing_files": [os.path.basename(p) for p in ql["missing_files"]],
         "coverage": {k: _scalar(v) for k, v in cov.items()},
     }
 
 
-def _cycle_unix(cycle_time: np.ndarray) -> np.ndarray:
-    """L1 ``cycle_time`` strings (``YYYY:DDD:HH:MM:SS``, UTC) -> POSIX seconds."""
-    return np.array(
-        [
-            datetime.strptime(s, "%Y:%j:%H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
-            for s in cycle_time
-        ],
-        dtype=float,
-    )
+def _cycle_flags(arrays: Dict[str, Any], attrs: Dict[str, Any], load: str) -> np.ndarray:
+    """Per-cycle antenna-dropout flags of one L1 product.
+
+    L1 v4 stores ``cycle_dropout``; for older products they are recomputed
+    with the pipeline's own rule, as ``Products.l1(clip=True)`` does.
+    """
+    if "cycle_dropout" in arrays:
+        return np.asarray(arrays["cycle_dropout"], dtype=bool)
+    from edges_pipeline.stages.l1 import effective_config, flag_cycles
+
+    cfg = attrs.get("config")
+    params = cfg if isinstance(cfg, dict) else {}
+    tcfg = effective_config({"time": params.get("time", {})})["time"]
+    bq = np.asarray(arrays["band_median_q"], dtype=np.float64)
+    return np.asarray(flag_cycles(bq, tcfg, load)["dropout"], dtype=bool)
 
 
-def _band_series(l1: Any, t0: float, t1: float) -> Tuple[Dict[str, Any], List[str]]:
-    """Per-cycle band power and band-median Q from the night's L1 products."""
+def _band_series(l1: Any, t0: float, t1: float) -> Tuple[Dict[str, Any], List[float], List[str]]:
+    """Per-cycle band power, band-median Q and dropout times from L1 products."""
+    from edges_pipeline.stages.l1 import acq_times_to_unix
+
     parts, missing, bands = [], [], None
-    for path in l1.path:
+    keys = ("cycle_time", "cycle_time_unix", "band_power", "band_median_q", "cycle_dropout")
+    for path, load in zip(l1.path, l1.load):
         try:
-            arrays, attrs = Products.load(
-                path, ("cycle_time", "band_power", "band_median_q")
-            )
-        except OSError as e:
+            arrays, attrs = Products.load(path, keys)
+            t = arrays.get("cycle_time_unix")
+            t = acq_times_to_unix(arrays["cycle_time"]) if t is None else np.asarray(t, float)
+            drop = _cycle_flags(arrays, attrs, load)
+        except (OSError, KeyError, ValueError) as e:
             log.warning("cannot read L1 product %s: %s", path, e)
             missing.append(os.path.basename(path))
             continue
         if bands is None:
             bands = (attrs.get("config") or {}).get("bands")
-        t = _cycle_unix(arrays["cycle_time"])
         keep = (t >= t0) & (t < t1)
-        parts.append((t[keep], arrays["band_power"][keep], arrays["band_median_q"][keep]))
+        parts.append((t[keep], arrays["band_power"][keep], arrays["band_median_q"][keep], drop[keep]))
     if parts:
         t = np.concatenate([p[0] for p in parts])
         power = np.concatenate([p[1] for p in parts])
         q = np.concatenate([p[2] for p in parts])
+        drop = np.concatenate([p[3] for p in parts])
         order = np.argsort(t, kind="stable")
-        t, power, q = t[order], power[order], q[order]
+        t, power, q, drop = t[order], power[order], q[order], drop[order]
     else:
-        t, power, q = np.array([]), np.empty((0, 3)), np.array([])
+        t, power, q, drop = np.array([]), np.empty((0, 3)), np.array([]), np.array([], bool)
+    dropout_times = _float_list(t[drop], 0)
     t, cols = insert_gaps(t, {"q": q, "p0": power[:, 0], "p1": power[:, 1], "p2": power[:, 2]})
     bands = bands or {}
     return {
@@ -487,7 +461,7 @@ def _band_series(l1: Any, t0: float, t1: float) -> Tuple[Dict[str, Any], List[st
         "p2": [_scalar(v) for v in cols["p2"]],
         "q_band_mhz": bands.get("q", [60.0, 90.0]),
         "power_band_mhz": bands.get("power", [50.0, 100.0]),
-    }, missing
+    }, dropout_times, missing
 
 
 def _housekeeping(cat: Any, t0: float, t1: float, names: List[str]) -> Dict[str, Any]:
@@ -534,7 +508,7 @@ def _files_qa(prod: Any, cat: Any, l1: Any, t0: float, t1: float) -> Tuple[List[
     except LookupError:
         ql_ids = set()
     fs = QA_THRESHOLDS["adc_full_scale"]
-    events: Dict[str, List[float]] = {"adc_clip_unix": [], "data_drop_unix": []}
+    events: Dict[str, List[float]] = {"dropout_unix": [], "adc_clip_unix": [], "data_drop_unix": []}
     clip_counts: Dict[int, int] = {}
     if cycles is not None and len(cycles):
         adcmax = cycles[["adcmax0", "adcmax1", "adcmax2"]].to_numpy(dtype=float)
@@ -555,21 +529,31 @@ def _files_qa(prod: Any, cat: Any, l1: Any, t0: float, t1: float) -> Tuple[List[
         name = os.path.basename(r.path)
         q = l1_by_id.get(fid)
         n_cycles = _scalar(r.n_cycles)
+
+        def win(col: str) -> Any:  # within-night value (Products.l1(clip=True))
+            return _scalar(getattr(q, col, None)) if q is not None else None
+
+        rfi_w = win("rfi_occupancy_window")
         row = {
             "file_id": fid,
             "name": name,
             "t_start_unix": _scalar(r.t_start_unix),
             "t_end_unix": _scalar(r.t_end_unix),
-            "n_cycles": n_cycles,
+            "n_cycles": n_cycles,  # whole file
+            "n_cycles_window": win("n_cycles_window"),
             "has_l1": q is not None,
             "has_ql": fid in ql_ids,
-            "total_data_drops": _scalar(r.total_data_drops),
+            "total_data_drops": _scalar(r.total_data_drops),  # whole file (catalog)
             "n_adc_clip_cycles": int(clip_counts.get(fid, 0)),
-            "rfi_occupancy": _scalar(q.rfi_occupancy) if q is not None else None,
-            "n_outlier_cycles": _scalar(q.n_outlier_cycles) if q is not None else None,
-            "n_persistent_lines": _scalar(q.n_persistent_lines) if q is not None else None,
-            "n_nonfinite": _scalar(q.n_nonfinite) if q is not None else None,
-            "q_median": _scalar(q.q_median_60_90) if q is not None else None,
+            "n_dropout_cycles": win("n_dropout_cycles_window"),
+            "n_outlier_cycles": win("n_outlier_cycles_window"),
+            "q_median": win("q_median_60_90_window"),
+            # per-cycle RFI needs L1 v4; until then the whole-file value
+            "rfi_occupancy": rfi_w if rfi_w is not None else win("rfi_occupancy"),
+            "rfi_whole_file": rfi_w is None and q is not None,
+            "n_persistent_lines": win("n_persistent_lines"),
+            "n_nonfinite": win("n_nonfinite"),
+            "window_flags": win("window_flags"),
         }
         row["badges"] = _badges(row, longest, fid in failed)
         files.append(row)
@@ -581,7 +565,7 @@ def _cycles(n: int) -> str:
 
 
 def _badges(row: Dict[str, Any], longest: int, failed: bool) -> List[Dict[str, str]]:
-    """QA badges for one file: level is ``warn``, ``info`` or ``ok``."""
+    """QA badges for one file: level is ``critical``, ``warn``, ``info`` or ``ok``."""
     b: List[Dict[str, str]] = []
     if not row["has_l1"] and not row["has_ql"]:
         b.append({
@@ -599,6 +583,9 @@ def _badges(row: Dict[str, Any], longest: int, failed: bool) -> List[Dict[str, s
         b.append({"level": "info", "text": "ends at the UTC-midnight file split"})
     elif longest and n < QA_THRESHOLDS["short_fraction"] * longest:
         b.append({"level": "info", "text": f"short ({_cycles(n)})"})
+    if (row.get("n_dropout_cycles") or 0) > 0:
+        b.insert(0, {"level": "critical",
+                     "text": f"antenna dropouts: {_cycles(int(row['n_dropout_cycles']))}"})
     if (row["total_data_drops"] or 0) > 0:
         b.append({"level": "warn", "text": f"data drops: {row['total_data_drops']}"})
     if row["n_adc_clip_cycles"] > 0:
@@ -607,7 +594,7 @@ def _badges(row: Dict[str, Any], longest: int, failed: bool) -> List[Dict[str, s
     if rfi is not None and rfi > QA_THRESHOLDS["rfi_occupancy"]:
         b.append({"level": "warn", "text": f"RFI occupancy {100 * rfi:.2f}%"})
     if (row["n_outlier_cycles"] or 0) > QA_THRESHOLDS["outlier_cycles"]:
-        b.append({"level": "warn", "text": f"outliers: {_cycles(row['n_outlier_cycles'])}"})
+        b.append({"level": "warn", "text": f"outliers: {_cycles(int(row['n_outlier_cycles']))}"})
     if (row["n_nonfinite"] or 0) > 0:
         b.append({"level": "info", "text": f"{row['n_nonfinite']} non-finite Q samples"})
     if not b:
@@ -622,12 +609,14 @@ def build_night(prod: Any, start: float, end: float, p0: bool = False, max_rows:
     out: Dict[str, Any] = {"night": _night_info(start, end, _latest_night(prod))}
     out["quicklook"] = _quicklook(prod, start, end, "ant", p0, max_rows)
     try:
-        l1 = prod.l1(start=start, end=end, load="ant")
+        # clip=True adds *_window columns: metrics of the cycles in the night
+        l1 = prod.l1(start=start, end=end, load="ant", clip=True)
     except LookupError:
         l1 = None
         notes.append("no L1 products yet")
+    dropout_times: List[float] = []
     if l1 is not None:
-        out["band"], missing = _band_series(l1, start, end)
+        out["band"], dropout_times, missing = _band_series(l1, start, end)
         if missing:
             notes.append(f"unreadable L1 products: {', '.join(missing)}")
     else:
@@ -645,6 +634,13 @@ def build_night(prod: Any, start: float, end: float, p0: bool = False, max_rows:
         out.setdefault("housekeeping", None)
         out.setdefault("files", [])
         out.setdefault("events", {"adc_clip_unix": [], "data_drop_unix": []})
+    out["events"]["dropout_unix"] = dropout_times
+    # Antenna dropouts (since 2026-09-02; edges-database ISSUES #24): the
+    # antenna power falls below the ambient load (Q < 0) for whole cycles.
+    out["dropouts"] = {
+        "n_cycles": len(dropout_times),
+        "n_files": sum(1 for f in out["files"] if (f.get("n_dropout_cycles") or 0) > 0),
+    }
     out["thresholds"] = QA_THRESHOLDS
     out["warnings"] = notes
     out["generated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")

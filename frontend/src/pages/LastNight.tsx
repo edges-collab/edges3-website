@@ -114,6 +114,15 @@ export default function LastNight() {
           {data.warnings.map((w) => (
             <div key={w} className="alert alert-secondary py-1 mb-0">{w}</div>
           ))}
+          {data.dropouts.n_cycles > 0 && (
+            <div className="alert alert-danger py-2 mb-0" role="alert">
+              <strong>⚠ Antenna dropouts:</strong> {data.dropouts.n_cycles} cycle
+              {data.dropouts.n_cycles === 1 ? "" : "s"} in {data.dropouts.n_files} file
+              {data.dropouts.n_files === 1 ? "" : "s"} this night — the antenna power
+              fell below the ambient load (Q &lt; 0). They are marked in red under the
+              waterfall and show as horizontal stripes in it (seen since 2026-09-02).
+            </div>
+          )}
           {!data.quicklook.available && (
             <div className="alert alert-info py-2 mb-0">
               No waterfall: {data.quicklook.reason ?? "no quick-look products"}
@@ -127,9 +136,9 @@ export default function LastNight() {
           <div className="border rounded p-2">
             <NightFigure data={data} quantity={shown} />
             <p className="text-muted small mb-0 px-2">
-              Uncalibrated quick-look products. Waterfall: {data.quicklook.n_cycles ?? 0} cycles
+              Uncalibrated quick-look products. Waterfall: {data.quicklook.n_rows} rows
               {data.quicklook.decimation && data.quicklook.decimation > 1
-                ? ` (averaged up to ${data.quicklook.decimation} per row, ${data.quicklook.n_rows} rows)` : ""}
+                ? ` (up to ${data.quicklook.decimation} cycles averaged per row, never across a gap)` : " (one per cycle)"}
               {" "}from {data.quicklook.files?.length ?? 0} files
               {data.quicklook.missing_files?.length ? `; unreadable: ${data.quicklook.missing_files.join(", ")}` : ""}.
               Blank columns and broken lines are gaps in the data.
@@ -142,6 +151,7 @@ export default function LastNight() {
               Badges use provisional thresholds: ADC full scale |x| ≥ {data.thresholds.adc_full_scale},
               RFI occupancy &gt; {100 * data.thresholds.rfi_occupancy}%, outliers &gt; {data.thresholds.outlier_cycles} cycles,
               short &lt; {100 * data.thresholds.short_fraction}% of the night's longest file.
+              RFI values marked * are whole-file (per-cycle RFI arrives with L1 v4).
               Generated {data.generated_at} in {data.elapsed_s} s.
             </p>
           </div>
