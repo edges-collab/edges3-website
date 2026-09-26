@@ -49,6 +49,7 @@ export default function InputsPreview({ dates }: Props) {
   useEffect(() => {
     const ctrl = new AbortController()
     setError(null)
+    setInputs(null) // never show the previous selection's inputs
     fetch(`${BASE_URL}/api/calibration/inputs?${new URLSearchParams(dates)}`, { signal: ctrl.signal })
       .then(async (r) => {
         if (!r.ok) {
@@ -70,6 +71,7 @@ export default function InputsPreview({ dates }: Props) {
     <div className="p-3 border rounded">
       <h1>Inputs</h1>
       {error && <div className="alert alert-warning py-2">Cannot resolve these dates: {error}</div>}
+      {!inputs && !error && <div className="text-muted small">Resolving the inputs in the catalog…</div>}
       {inputs && (
         <>
           {inputs.issues.length > 0 ? (
@@ -99,7 +101,7 @@ export default function InputsPreview({ dates }: Props) {
             </div>
             <table className="table table-sm small mt-2 mb-0">
               <thead>
-                <tr><th>Temperature</th><th>Probe</th><th className="text-end">Value</th><th>From</th><th>Reading time</th></tr>
+                <tr><th>Temperature</th><th>Probe</th><th className="text-end">Value</th><th>From</th><th>Reading</th></tr>
               </thead>
               <tbody>
                 {Object.entries(TEMP_LABEL).map(([k, label]) => {
@@ -111,7 +113,11 @@ export default function InputsPreview({ dates }: Props) {
                       <td>{t.probe}</td>
                       <td className="text-end">{t.temperature_k.toFixed(2)} K</td>
                       <td>{SOURCE_LABEL[t.source]}</td>
-                      <td>{utc(t.reading_time)}</td>
+                      <td>
+                        {t.source === "snapshot"
+                          ? `snapshot of the hour ${utc(t.reading_time)}`
+                          : utc(t.reading_time)}
+                      </td>
                     </tr>
                   )
                 })}

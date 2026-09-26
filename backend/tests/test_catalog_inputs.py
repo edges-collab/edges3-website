@@ -71,6 +71,10 @@ def test_resolve_dates(cat):
     try:
         r = catalog_inputs.resolve_dates(cat, {}, avail)
         assert r["raw"] == T_B.strftime("2025_100_%H_%M_%S")  # latest with >= 30 cycles
+        catalog_inputs.MIN_LATEST_RAW_CYCLES = 1
+        # T_DAY is the newest file, so it may still be being written: skipped
+        r = catalog_inputs.resolve_dates(cat, {}, avail)
+        assert r["raw"] != RAW_DAY and r["raw"] < RAW_DAY
     finally:
         catalog_inputs.MIN_LATEST_RAW_CYCLES = 100
     with pytest.raises(catalog_inputs.InputError):
@@ -101,6 +105,34 @@ def test_resolve_inputs(cat):
     assert t["lna"]["source"] == "templog" and t["lna"]["temperature_c"] == pytest.approx(25.0)
     assert t["obs_ambient"]["temperature_c"] == pytest.approx(25.0)
     assert not any("temperature" in i for i in inp["issues"])
+
+
+def test_auto_s11_needs_a_nearby_session(cat, monkeypatch):
+    avail = catalog_inputs.available_dates(cat)
+    monkeypatch.setattr(catalog_inputs, "recommended_s11", lambda cat, day: None)
+    with pytest.raises(catalog_inputs.InputError, match="choose one explicitly"):
+        catalog_inputs.resolve_dates(cat, {}, avail)
+    # a recommendation the site cannot use (not in its list) is refused too
+    monkeypatch.setattr(catalog_inputs, "recommended_s11", lambda cat, day: "2025_102_09")
+    with pytest.raises(catalog_inputs.InputError):
+        catalog_inputs.resolve_dates(cat, {}, avail)
+
+
+def test_inputs_digest_sees_changed_files(api, cat):
+    _, backend_api, _ = api
+    dates = {"cal": CAL_DATE, "s11": S11_GOOD, "raw": RAW_A}
+    inp = catalog_inputs.resolve_inputs(cat, dates)
+    before = backend_api._inputs_digest(inp)
+    assert all(v["live"] and v["catalog_sha256"] for v in inp["file_versions"].values())
+    ant = inp["files"]["ant"]
+    import os
+
+    st = os.stat(ant)
+    os.utime(ant, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))  # (synthetic file)
+    try:
+        assert backend_api._inputs_digest(catalog_inputs.resolve_inputs(cat, dates)) != before
+    finally:
+        os.utime(ant, ns=(st.st_atime_ns, st.st_mtime_ns))
 
 
 def test_resolve_inputs_issues(cat):

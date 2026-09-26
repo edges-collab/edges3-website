@@ -420,25 +420,38 @@ def _cycle_flags(arrays: Dict[str, Any], attrs: Dict[str, Any], load: str) -> np
     return np.asarray(flag_cycles(bq, tcfg, load)["dropout"], dtype=bool)
 
 
-def _band_series(l1: Any, t0: float, t1: float) -> Tuple[Dict[str, Any], List[float], List[str]]:
-    """Per-cycle band power, band-median Q and dropout times from L1 products."""
+def _band_series(
+    l1: Any, t0: float, t1: float
+) -> Tuple[Dict[str, Any], List[float], Dict[int, int], List[str]]:
+    """Per-cycle band power, band-median Q and dropouts from L1 products.
+
+    Returns the series, the dropout times, per-file dropout counts within
+    ``[t0, t1)`` (by catalog file id) and unreadable products.
+    """
     from edges_pipeline.stages.l1 import acq_times_to_unix
 
     parts, missing, bands = [], [], None
+    per_file: Dict[int, int] = {}
     keys = ("cycle_time", "cycle_time_unix", "band_power", "band_median_q", "cycle_dropout")
-    for path, load in zip(l1.path, l1.load):
+    for path, load, fid in zip(l1.path, l1.load, l1.catalog_file_id):
         try:
             arrays, attrs = Products.load(path, keys)
             t = arrays.get("cycle_time_unix")
             t = acq_times_to_unix(arrays["cycle_time"]) if t is None else np.asarray(t, float)
-            drop = _cycle_flags(arrays, attrs, load)
         except (OSError, KeyError, ValueError) as e:
             log.warning("cannot read L1 product %s: %s", path, e)
             missing.append(os.path.basename(path))
             continue
+        try:
+            drop = _cycle_flags(arrays, attrs, load)
+        except (KeyError, ValueError) as e:  # keep the series, lose only the flags
+            log.warning("cannot flag dropouts in %s: %s", path, e)
+            drop = np.zeros(len(t), dtype=bool)
         if bands is None:
             bands = (attrs.get("config") or {}).get("bands")
         keep = (t >= t0) & (t < t1)
+        if fid is not None and fid == fid:
+            per_file[int(fid)] = int((drop & keep).sum())
         parts.append((t[keep], arrays["band_power"][keep], arrays["band_median_q"][keep], drop[keep]))
     if parts:
         t = np.concatenate([p[0] for p in parts])
@@ -460,7 +473,7 @@ def _band_series(l1: Any, t0: float, t1: float) -> Tuple[Dict[str, Any], List[fl
         "p2": [_scalar(v) for v in cols["p2"]],
         "q_band_mhz": bands.get("q", [60.0, 90.0]),
         "power_band_mhz": bands.get("power", [50.0, 100.0]),
-    }, dropout_times, missing
+    }, dropout_times, per_file, missing
 
 
 def _housekeeping(cat: Any, t0: float, t1: float, names: List[str]) -> Dict[str, Any]:
@@ -486,7 +499,7 @@ def _housekeeping(cat: Any, t0: float, t1: float, names: List[str]) -> Dict[str,
     return {"series": series, "n_readings": int(len(hk)), "gap_s": HOUSEKEEPING_GAP_S}
 
 
-def _files_qa(prod: Any, cat: Any, l1: Any, t0: float, t1: float) -> Tuple[List[Dict[str, Any]], Dict[str, List[float]]]:
+def _files_qa(prod: Any, cat: Any, l1: Any, t0: float, t1: float, dropouts: Dict[int, int]) -> Tuple[List[Dict[str, Any]], Dict[str, List[float]]]:
     """Per-file QA rows (catalog spectra + L1 metrics) and ADC/drop event times."""
     spectra = cat.spectra(load="ant", start=t0, end=t1, deployment=DEPLOYMENT)
     ids = [int(i) for i in spectra.file_id]
@@ -544,7 +557,13 @@ def _files_qa(prod: Any, cat: Any, l1: Any, t0: float, t1: float) -> Tuple[List[
             "has_ql": fid in ql_ids,
             "total_data_drops": _scalar(r.total_data_drops),  # whole file (catalog)
             "n_adc_clip_cycles": int(clip_counts.get(fid, 0)),
-            "n_dropout_cycles": win("n_dropout_cycles_window"),
+            # Products.l1(clip=True); where it could not use the product, the
+            # site's own count from the same per-cycle flags as the strip
+            "n_dropout_cycles": (
+                win("n_dropout_cycles_window")
+                if win("n_dropout_cycles_window") is not None
+                else (dropouts.get(fid) if q is not None else None)
+            ),
             "n_outlier_cycles": win("n_outlier_cycles_window"),
             "q_median": win("q_median_60_90_window"),
             # per-cycle RFI needs L1 v4; until then the whole-file value
@@ -614,8 +633,9 @@ def build_night(prod: Any, start: float, end: float, p0: bool = False, max_rows:
         l1 = None
         notes.append("no L1 products yet")
     dropout_times: List[float] = []
+    dropouts: Dict[int, int] = {}
     if l1 is not None:
-        out["band"], dropout_times, missing = _band_series(l1, start, end)
+        out["band"], dropout_times, dropouts, missing = _band_series(l1, start, end)
         if missing:
             notes.append(f"unreadable L1 products: {', '.join(missing)}")
     else:
@@ -624,7 +644,7 @@ def build_night(prod: Any, start: float, end: float, p0: bool = False, max_rows:
         with _open_catalog(prod) as cat:
             out["housekeeping"] = _housekeeping(cat, start, end, list(HOUSEKEEPING_NAMES))
             out["files"], out["events"] = _files_qa(
-                prod, cat, l1 if l1 is not None else _empty_l1(), start, end
+                prod, cat, l1 if l1 is not None else _empty_l1(), start, end, dropouts
             )
     except Exception as e:  # the catalog is optional for the waterfall
         log.exception("catalog query failed")
@@ -650,7 +670,7 @@ def build_night(prod: Any, start: float, end: float, p0: bool = False, max_rows:
 def _empty_l1() -> Any:
     import pandas as pd
 
-    return pd.DataFrame(columns=["catalog_file_id", "path"])
+    return pd.DataFrame(columns=["catalog_file_id", "path", "load"])
 
 
 # ---------------------------------------------------------------------------

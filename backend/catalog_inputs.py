@@ -132,9 +132,12 @@ def resolve_dates(
         out[key] = v
     v = dates.get("s11") or LATEST
     if v == LATEST:
-        v = recommended_s11(cat, out["cal"]) or (available.get("s11") or [None])[-1]
-        if v is None:
-            raise InputError("No s11 dates available")
+        v = recommended_s11(cat, out["cal"])
+        if v is None or v not in available.get("s11", []):
+            raise InputError(
+                f"No usable full S11 session near calibration day {out['cal']}:"
+                " choose one explicitly"
+            )
     elif v not in available.get("s11", []):
         raise InputError(f"Unknown s11 date: {v!r}")
     out["s11"] = v
@@ -142,12 +145,18 @@ def resolve_dates(
 
 
 def _latest_complete_raw(cat: Any) -> Optional[str]:
-    """The latest antenna spectrum with at least ``MIN_LATEST_RAW_CYCLES`` cycles."""
+    """The latest *finished* antenna spectrum with at least ``MIN_LATEST_RAW_CYCLES``.
+
+    Finished means a later antenna file exists (FASTSPEC had moved on when the
+    catalog was updated), so the file was not still being written.
+    """
     df = cat.sql(
         "SELECT relpath FROM v_spectra WHERE load = 'ant' AND status = 'present'"
         " AND category = 'science' AND deployment = ? AND n_cycles >= ?"
+        " AND t_start_unix < (SELECT max(t_start_unix) FROM v_spectra WHERE"
+        " load = 'ant' AND status = 'present' AND deployment = ?)"
         " ORDER BY t_start_unix DESC LIMIT 1",
-        (DEPLOYMENT, MIN_LATEST_RAW_CYCLES),
+        (DEPLOYMENT, MIN_LATEST_RAW_CYCLES, DEPLOYMENT),
     )
     if df.empty:
         return None
@@ -184,6 +193,26 @@ def _file_times(cat: Any, paths: List[str]) -> Dict[str, Dict[str, Optional[floa
         }
         for r in df.itertuples()
     }
+
+
+def _file_versions(cat: Any, files: Dict[str, Any]) -> Dict[str, Any]:
+    """Version of every input: catalog sha256 and live size/mtime (dedup key)."""
+    paths = [p for k, p in files.items() if k != "s11" and p] + list(files["s11"].values())
+    if not paths:
+        return {}
+    df = cat.sql(
+        f"SELECT path, size, sha256 FROM v_file WHERE path IN ({','.join('?' * len(paths))})",
+        tuple(paths),
+    )
+    out: Dict[str, Any] = {}
+    for r in df.itertuples():
+        try:  # the file now (metadata only), in case it changed since the catalog update
+            st = os.stat(r.path)
+            live = [st.st_size, st.st_mtime_ns]
+        except OSError:
+            live = None
+        out[r.path] = {"catalog_sha256": r.sha256, "live": live}
+    return out
 
 
 def probe_temperature(
@@ -245,10 +274,12 @@ def resolve_inputs(cat: Any, resolved: Dict[str, str]) -> Dict[str, Any]:
         paths = ci["spectra"].get(load) or []
         files[load] = paths[0] if paths else None
 
+    name = f"/{raw}_ant.acq"
     ant = cat.sql(
         "SELECT path FROM v_file WHERE kind = 'acq' AND load = 'ant'"
-        " AND status = 'present' AND deployment = ? AND relpath LIKE ?",
-        (DEPLOYMENT, f"%/{raw}_ant.acq"),
+        " AND status = 'present' AND category = 'science' AND deployment = ?"
+        " AND substr(relpath, -length(?)) = ? ORDER BY relpath",
+        (DEPLOYMENT, name, name),
     )
     if ant.empty:
         raise InputError(f"No antenna spectrum {raw!r} in the catalog")
@@ -261,10 +292,20 @@ def resolve_inputs(cat: Any, resolved: Dict[str, str]) -> Dict[str, Any]:
     s11 = cat.s11_files(int(match.id.iloc[-1]))
     files["s11"] = dict(zip(s11.label, s11.path))
     suggested = recommended_s11(cat, cal_date)
-    if suggested and suggested != s11_stem:
+    if suggested != s11_stem:
+        # the catalog's S11 remarks are about its own pick, not this one
+        issues = [i for i in issues if not i.startswith("no full S11 session")]
         issues.append(
-            f"S11 session {s11_stem} chosen; the catalog recommends {suggested}"
-            f" for calibration day {cal_date}"
+            f"S11 session {s11_stem} chosen; the catalog recommends"
+            f" {suggested or 'none'} for calibration day {cal_date}"
+        )
+    root = ci.get("root") or str(config.RAW_DATA_ROOT)
+    off_root = [p for p in files["s11"].values() if os.path.dirname(p) != root.rstrip("/")]
+    if off_root:
+        # alancal_edges3 and the antenna S11 read <root>/<stem>_*.s1p
+        issues.append(
+            f"{len(off_root)} S11 files are not in the spectra root {root};"
+            " the calibration reads the copies there"
         )
 
     times = _file_times(cat, [p for p in (files.get("amb"), files.get("hot"), files["ant"]) if p])
@@ -300,8 +341,9 @@ def resolve_inputs(cat: Any, resolved: Dict[str, str]) -> Dict[str, Any]:
 
     return {
         "dates": dict(resolved),
-        "root": ci.get("root") or str(config.RAW_DATA_ROOT),
+        "root": root,
         "files": files,
+        "file_versions": _file_versions(cat, files),
         "temperatures": temps,
         "hk_coverage": ci.get("hk_coverage"),
         "recommended_s11": suggested,

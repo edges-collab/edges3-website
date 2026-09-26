@@ -1126,20 +1126,27 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     config.ensure_dirs()
     if args.inputs:
+        if args.cal_date or args.s11_date or args.spec_date:
+            p.error("give either --inputs or the dates, not both")
         with open(args.inputs) as f:
             inputs = json.load(f)
     else:
         if not (args.cal_date and args.spec_date):
             p.error("give --inputs, or --cal_date and --spec_date (and --s11_date)")
-        import catalog_inputs  # noqa: E402  (needs edges-catalog/edges-pipeline)
+        try:
+            import catalog_inputs  # noqa: E402  (needs edges-catalog/edges-pipeline)
 
-        with catalog_inputs.open_catalog() as cat:
-            resolved = catalog_inputs.resolve_dates(
-                cat,
-                {"cal": args.cal_date, "s11": args.s11_date or "Latest", "raw": args.spec_date},
-                catalog_inputs.available_dates(cat),
-            )
-            inputs = catalog_inputs.resolve_inputs(cat, resolved)
+            with catalog_inputs.open_catalog() as cat:
+                resolved = catalog_inputs.resolve_dates(
+                    cat,
+                    {"cal": args.cal_date, "s11": args.s11_date or "Latest", "raw": args.spec_date},
+                    catalog_inputs.available_dates(cat),
+                )
+                inputs = catalog_inputs.resolve_inputs(cat, resolved)
+        except ValueError as e:  # catalog_inputs.InputError: unknown date/session
+            p.error(str(e))
+        except Exception as e:  # e.g. packages or catalog missing (HTTPException 503)
+            p.error(f"cannot resolve the inputs in the catalog: {getattr(e, 'detail', e)}")
         run_dir = Path(args.run_dir)
         run_dir.mkdir(parents=True, exist_ok=True)
         with open(run_dir / "inputs.json", "w") as f:

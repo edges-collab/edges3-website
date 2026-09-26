@@ -192,9 +192,17 @@ def _resolve_run_inputs(dates_in: Dict[str, str]) -> Dict[str, Any]:
 
 
 def _inputs_digest(inputs: Dict[str, Any]) -> str:
-    """Fingerprint of the files and temperatures a run uses (part of the dedup key)."""
+    """Fingerprint of the files (and their contents) and temperatures of a run.
+
+    Part of the dedup key, so a changed input (a file that grew, corrected
+    temperatures) is recomputed instead of reusing stale outputs.
+    """
     blob = json.dumps(
-        {"files": inputs["files"], "temperatures": inputs["temperatures"]},
+        {
+            "files": inputs["files"],
+            "versions": inputs.get("file_versions"),  # size + sha256 per file
+            "temperatures": inputs["temperatures"],
+        },
         sort_keys=True, default=str,
     )
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
