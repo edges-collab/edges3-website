@@ -10,6 +10,8 @@ The night of 2025-04-10 at the MRO (18:00-06:00 AWST = 10:00-22:00 UTC) has:
 - ``B`` 12:00 UTC, 40 cycles (a ~1 h gap after ``A``);
 - ``C`` 13:00 UTC, 10 cycles (a short file);
 - ``bad`` 14:00 UTC, NUL-padded (read_acq cannot decode it: no products);
+- ``day`` 2025-04-11 05:00 UTC (13:00 AWST), 5 cycles: daytime data after
+  the night, so ``Products.latest_night`` points at the (empty) next night;
 - a temperature log every 5 min over 10:00-11:00 and 12:30-13:30 UTC.
 """
 
@@ -37,6 +39,7 @@ T_A = datetime(2025, 4, 10, 10, 30, 0, tzinfo=UTC)
 T_B = datetime(2025, 4, 10, 12, 0, 0, tzinfo=UTC)
 T_C = datetime(2025, 4, 10, 13, 0, 0, tzinfo=UTC)
 T_BAD = datetime(2025, 4, 10, 14, 0, 0, tzinfo=UTC)
+T_DAY = datetime(2025, 4, 11, 5, 0, 0, tzinfo=UTC)
 CYCLE_S = 23
 
 
@@ -98,6 +101,7 @@ def build_env(tmp: Path):
     good = write_acq(root, T_A, 40, clip_cycle=5)
     write_acq(root, T_B, 40, seed=1)
     write_acq(root, T_C, 10, seed=2)
+    write_acq(root, T_DAY, 5, seed=3)
     src = good.read_bytes()
     cut = src.index(b"# swpos 0", src.index(b"# swpos 2"))
     bad = root / "mro/ant/2025" / _acq_name(T_BAD)

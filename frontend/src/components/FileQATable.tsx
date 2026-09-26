@@ -1,8 +1,8 @@
 /**
  * Per-file QA for one night: catalogue facts (cycles, data drops, ADC
- * full-scale hits) and L1 metrics, with badges computed by the backend.
- * Files without products (e.g. unreadable .acq files) are listed, not
- * treated as errors.
+ * full-scale hits within the night) and L1 metrics, with badges computed
+ * by the backend. Catalogued files without products (e.g. .acq files that
+ * read_acq cannot decode) are listed, not treated as errors.
  */
 import type { Badge, FileQA } from "../types/night"
 import { toSiteTime } from "../utils/nightData"
@@ -37,7 +37,7 @@ export default function FileQATable({ files, utcOffsetHours }: Props) {
             <th className="text-end">RFI occ.</th>
             <th className="text-end">Outliers</th>
             <th className="text-end">Lines</th>
-            <th className="text-end">ADC FS</th>
+            <th className="text-end" title="Cycles at ADC full scale within the night">ADC FS</th>
             <th className="text-end">Drops</th>
             <th>QA</th>
           </tr>

@@ -35,10 +35,13 @@ products (``$EDGES_PIPELINE_ROOT/catalog.sqlite``).
 from __future__ import annotations
 
 import base64
+import contextlib
 import logging
 import os
+import sqlite3
 import threading
 import time
+import warnings
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -92,11 +95,13 @@ GAP_FACTOR = 5.0
 HOUSEKEEPING_GAP_S = 20 * 60
 
 MAX_SPAN_DAYS = 8
+MAX_SPAN_DAYS_P0 = 2  # the p0 waterfall doubles the payload
 MAX_ROWS_LIMIT = 5000
 DEFAULT_MAX_ROWS = 2000
 
 CACHE_TTL_S = 15 * 60
 CACHE_MAX_ENTRIES = 8
+HEAVY_WAIT_S = 30
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +136,29 @@ def get_products() -> Any:
         if _products is None:
             _products = Products()
         return _products
+
+
+@contextlib.contextmanager
+def _db_errors():
+    """Turn database errors (missing/unreadable SQLite files) into 503s."""
+    try:
+        yield
+    except (sqlite3.Error, OSError) as e:
+        log.warning("products/catalog database unavailable: %s", e)
+        raise HTTPException(
+            status_code=503, detail=f"catalog/products database unavailable: {e}"
+        ) from None
+
+
+@contextlib.contextmanager
+def _heavy_slot():
+    """Bound concurrent heavy requests; give up (503) rather than queue forever."""
+    if not _heavy.acquire(timeout=HEAVY_WAIT_S):
+        raise HTTPException(status_code=503, detail="server busy; try again")
+    try:
+        yield
+    finally:
+        _heavy.release()
 
 
 def _open_catalog(prod: Any) -> Any:
@@ -270,10 +298,20 @@ def _night_info(start: float, end: float, latest: Optional[Tuple[float, float]])
 
 
 def _latest_night(prod: Any) -> Optional[Tuple[float, float]]:
+    """The latest night that has QL data.
+
+    ``Products.latest_night`` returns the night *containing* the latest data,
+    and puts any instant after local noon into the coming evening's night, so
+    daytime data (the instrument records all day) would select tonight's
+    still-empty night. Step back a night in that case.
+    """
     try:
-        return prod.latest_night(deployment=DEPLOYMENT)
+        start, end = prod.latest_night(deployment=DEPLOYMENT)
     except LookupError:
         return None
+    if prod.ql_files(start, end, load="ant", deployment=DEPLOYMENT).empty:
+        start, end = start - 86400, end - 86400
+    return start, end
 
 
 # ---------------------------------------------------------------------------
@@ -322,15 +360,54 @@ def _data_version(prod: Any) -> Tuple:
 # ---------------------------------------------------------------------------
 # Payload builders
 # ---------------------------------------------------------------------------
+def _nanmean_groups(x: np.ndarray, n: int) -> np.ndarray:
+    """Mean over consecutive groups of ``n`` rows (NaN-aware; last group partial)."""
+    m = -(-len(x) // n)
+    pad = m * n - len(x)
+    if pad:
+        x = np.concatenate([x, np.full((pad, *x.shape[1:]), np.nan, x.dtype)])
+    with np.errstate(invalid="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        return np.nanmean(x.reshape(m, n, *x.shape[1:]), axis=1)
+
+
+def decimate_segments(
+    t: np.ndarray, columns: Dict[str, np.ndarray], n: int, factor: float = GAP_FACTOR
+) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
+    """Average groups of ``n`` rows *within* gap-free segments.
+
+    Groups never straddle a gap (which would put averaged rows inside it).
+    ``lst_hour`` is averaged on the circle, so the 24 -> 0 wrap is handled.
+    """
+    t = np.asarray(t, dtype=float)
+    if n <= 1 or len(t) == 0:
+        return t, columns
+    step = float(np.median(np.diff(t))) if len(t) > 1 else 0.0
+    cuts = _gap_positions(t, factor * step) + 1 if step > 0 else np.array([], int)
+    bounds = [0, *cuts.tolist(), len(t)]
+    t_out, out = [], {k: [] for k in columns}
+    for a, b in zip(bounds[:-1], bounds[1:]):
+        t_out.append(_nanmean_groups(t[a:b], n))
+        for k, v in columns.items():
+            v = np.asarray(v, dtype=float)[a:b]
+            if k == "lst_hour":
+                ang = v * (2 * np.pi / 24)
+                c, s = _nanmean_groups(np.cos(ang), n), _nanmean_groups(np.sin(ang), n)
+                out[k].append((np.arctan2(s, c) * 24 / (2 * np.pi)) % 24)
+            else:
+                out[k].append(_nanmean_groups(v, n))
+    return np.concatenate(t_out), {k: np.concatenate(v) for k, v in out.items()}
+
+
 def _quicklook(prod: Any, t0: float, t1: float, load: str, p0: bool, max_rows: int) -> Dict[str, Any]:
     quantities = ("waterfall_q", "waterfall_p0") if p0 else ("waterfall_q",)
     try:
+        # Decimate here, per gap-free segment, not in Products.quicklook().
         ql = prod.quicklook(
-            t0, t1, load=load, quantities=quantities, deployment=DEPLOYMENT,
-            max_rows=max_rows,
+            t0, t1, load=load, quantities=quantities, deployment=DEPLOYMENT
         )
     except LookupError as e:
-        return {"available": False, "reason": str(e), "n_rows": 0}
+        return {"available": False, "reason": str(e), "n_rows": 0, "n_cycles": 0}
     cov = ql["coverage"]
     n = len(ql["time_unix"])
     reason = None
@@ -340,20 +417,24 @@ def _quicklook(prod: Any, t0: float, t1: float, load: str, p0: bool, max_rows: i
             and cov["t_first_unix"] <= t1 and cov["t_last_unix"] >= t0
         )
         reason = "no data in this range" if processed else "not processed (outside QL coverage)"
-    t, cols = insert_gaps(
-        ql["time_unix"], {"lst_hour": ql["lst_hour"], **{q: ql[q] for q in quantities}}
+    dec = -(-n // max_rows) if n > max_rows else 1
+    t, cols = decimate_segments(
+        ql["time_unix"], {"lst_hour": ql["lst_hour"], **{q: ql[q] for q in quantities}}, dec
     )
+    n_rows = len(t)
+    t, cols = insert_gaps(t, cols)
     return {
         "available": n > 0,
         "reason": reason,
-        "n_rows": n,
+        "n_cycles": n,
+        "n_rows": n_rows,
         "time_unix": _float_list(t, 1),
         "lst_hour": _float_list(cols["lst_hour"], 5),
         "freq_mhz": _float_list(ql["freq_mhz"], 4),
         "freq_edges_mhz": _float_list(ql["freq_edges_mhz"], 4),
         "waterfall_q": _encode_f32(cols["waterfall_q"]) if n else None,
         "waterfall_p0": _encode_f32(cols["waterfall_p0"]) if n and p0 else None,
-        "decimation": int(ql["decimation"]),
+        "decimation": dec,
         "files": [os.path.basename(p) for p in ql["files"]],
         "missing_files": [os.path.basename(p) for p in ql["missing_files"]],
         "coverage": {k: _scalar(v) for k, v in cov.items()},
@@ -465,7 +546,7 @@ def _files_qa(prod: Any, cat: Any, l1: Any, t0: float, t1: float) -> Tuple[List[
         inside = (tc >= t0) & (tc < t1)
         events["adc_clip_unix"] = _float_list(tc[clip & inside], 0)
         events["data_drop_unix"] = _float_list(tc[dropped & inside], 0)
-        clip_counts = cycles[clip].groupby("file_id").size().to_dict()
+        clip_counts = cycles[clip & inside].groupby("file_id").size().to_dict()
 
     longest = max([int(n) for n in spectra.n_cycles.fillna(0)] or [0])
     files = []
@@ -507,11 +588,17 @@ def _badges(row: Dict[str, Any], longest: int, failed: bool) -> List[Dict[str, s
             "level": "info",
             "text": "unreadable (no products)" if failed else "not processed yet",
         })
+    elif not row["has_l1"]:
+        b.append({"level": "info", "text": "no L1 (failed)" if failed else "no L1 yet"})
     n = row["n_cycles"] or 0
-    if longest and n < QA_THRESHOLDS["short_fraction"] * longest:
-        start = row["t_start_unix"]
-        cont = start is not None and (start % 86400) < 60
-        b.append({"level": "info", "text": f"short ({_cycles(n)}){' – UTC-midnight continuation' if cont else ''}"})
+    end = row["t_end_unix"]
+    # Files are split at UTC midnight (08:00 AWST): the night's last file is
+    # usually cut short there, by design.
+    cut_at_midnight = end is not None and end % 86400 > 86400 - 120
+    if cut_at_midnight:
+        b.append({"level": "info", "text": "ends at the UTC-midnight file split"})
+    elif longest and n < QA_THRESHOLDS["short_fraction"] * longest:
+        b.append({"level": "info", "text": f"short ({_cycles(n)})"})
     if (row["total_data_drops"] or 0) > 0:
         b.append({"level": "warn", "text": f"data drops: {row['total_data_drops']}"})
     if row["n_adc_clip_cycles"] > 0:
@@ -531,18 +618,18 @@ def _badges(row: Dict[str, Any], longest: int, failed: bool) -> List[Dict[str, s
 def build_night(prod: Any, start: float, end: float, p0: bool = False, max_rows: int = DEFAULT_MAX_ROWS) -> Dict[str, Any]:
     """Everything the night page shows, from precomputed products only."""
     tic = time.perf_counter()
-    warnings: List[str] = []
+    notes: List[str] = []
     out: Dict[str, Any] = {"night": _night_info(start, end, _latest_night(prod))}
     out["quicklook"] = _quicklook(prod, start, end, "ant", p0, max_rows)
     try:
         l1 = prod.l1(start=start, end=end, load="ant")
     except LookupError:
         l1 = None
-        warnings.append("no L1 products yet")
+        notes.append("no L1 products yet")
     if l1 is not None:
         out["band"], missing = _band_series(l1, start, end)
         if missing:
-            warnings.append(f"unreadable L1 products: {', '.join(missing)}")
+            notes.append(f"unreadable L1 products: {', '.join(missing)}")
     else:
         out["band"] = None
     try:
@@ -553,12 +640,13 @@ def build_night(prod: Any, start: float, end: float, p0: bool = False, max_rows:
             )
     except Exception as e:  # the catalog is optional for the waterfall
         log.exception("catalog query failed")
-        warnings.append(f"catalog unavailable: {e}")
+        notes.append(f"catalog unavailable: {e}")
+        out["degraded"] = True
         out.setdefault("housekeeping", None)
         out.setdefault("files", [])
         out.setdefault("events", {"adc_clip_unix": [], "data_drop_unix": []})
     out["thresholds"] = QA_THRESHOLDS
-    out["warnings"] = warnings
+    out["warnings"] = notes
     out["generated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     out["elapsed_s"] = round(time.perf_counter() - tic, 3)
     return out
@@ -585,7 +673,7 @@ def status() -> Dict[str, Any]:
             out[stage] = {k: _scalar(v) for k, v in prod.coverage(stage).items()}
         except LookupError:
             out[stage] = None
-        except Exception as e:
+        except (sqlite3.Error, OSError) as e:
             out["available"], out["error"] = False, str(e)
     return out
 
@@ -593,7 +681,8 @@ def status() -> Dict[str, Any]:
 @router.get("/nights/latest")
 def nights_latest() -> Dict[str, Any]:
     prod = get_products()
-    latest = _latest_night(prod)
+    with _db_errors():
+        latest = _latest_night(prod)
     if latest is None:
         raise HTTPException(status_code=404, detail="no quick-look products yet")
     return _night_info(*latest, latest)
@@ -611,9 +700,12 @@ def night(
             day = datetime.strptime(date, "%Y-%m-%d").date()
         except ValueError:
             raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD") from None
+        if not 2000 <= day.year <= 2100:
+            raise HTTPException(status_code=400, detail="date out of range")
         start, end = _night_bounds(day)
     else:
-        latest = _latest_night(prod)
+        with _db_errors():
+            latest = _latest_night(prod)
         if latest is None:
             raise HTTPException(status_code=404, detail="no quick-look products yet")
         start, end = latest
@@ -621,9 +713,10 @@ def night(
     hit = _cache.get(key)
     if hit is not None:
         return hit
-    with _heavy:
+    with _heavy_slot(), _db_errors():
         payload = build_night(prod, start, end, p0=p0, max_rows=max_rows)
-    _cache.put(key, payload)
+    if not payload.get("degraded"):  # don't keep a transient failure for 15 min
+        _cache.put(key, payload)
     return payload
 
 
@@ -637,7 +730,11 @@ def quicklook(
 ) -> Dict[str, Any]:
     prod = get_products()
     t0, t1 = _require_range(start, end)
-    with _heavy:
+    if p0 and t1 - t0 > MAX_SPAN_DAYS_P0 * 86400:
+        raise HTTPException(
+            status_code=400, detail=f"p0 ranges are limited to {MAX_SPAN_DAYS_P0} days"
+        )
+    with _heavy_slot(), _db_errors():
         return _quicklook(prod, t0, t1, load, p0, max_rows)
 
 
@@ -646,7 +743,8 @@ def l1(start: str, end: str, load: Optional[str] = "ant") -> Dict[str, Any]:
     prod = get_products()
     t0, t1 = _require_range(start, end)
     try:
-        df = prod.l1(start=t0, end=t1, load=load or None)
+        with _db_errors():
+            df = prod.l1(start=t0, end=t1, load=load or None)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e)) from None
     drop = [c for c in ("path", "input_path", "t_start", "t_end") if c in df]
@@ -663,5 +761,5 @@ def housekeeping(start: str, end: str, names: Optional[str] = None) -> Dict[str,
     prod = get_products()
     t0, t1 = _require_range(start, end)
     wanted = [n for n in (names or "").split(",") if n] or list(HOUSEKEEPING_NAMES)
-    with _open_catalog(prod) as cat:
+    with _db_errors(), _open_catalog(prod) as cat:
         return _housekeeping(cat, t0, t1, wanted)

@@ -18,9 +18,12 @@ export default function LastNight() {
   const [params, setParams] = useSearchParams()
   const date = params.get("date")
   const [quantity, setQuantity] = useState<Quantity>("q")
-  const [data, setData] = useState<NightPayload | null>(null)
+  // The payload and the `date` it was requested for, so a previous night is
+  // never shown under a new URL while it loads (or after an error).
+  const [loaded, setLoaded] = useState<{ date: string | null; payload: NightPayload } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [pick, setPick] = useState("") // date-picker text, committed on Enter/blur
 
   useEffect(() => {
     const ctrl = new AbortController()
@@ -37,7 +40,11 @@ export default function LastNight() {
         }
         return r.json() as Promise<NightPayload>
       })
-      .then((d) => setData(d))
+      .then((d) => {
+        if (ctrl.signal.aborted) return
+        setLoaded({ date, payload: d })
+        setPick(d.night.date)
+      })
       .catch((e: unknown) => {
         if (ctrl.signal.aborted) return
         setError(e instanceof Error ? e.message : String(e))
@@ -48,9 +55,15 @@ export default function LastNight() {
     return () => ctrl.abort()
   }, [date, quantity])
 
+  const data = loaded && loaded.date === date ? loaded.payload : null
   const night = data?.night
   const go = (d: string | null) => setParams(d ? { date: d } : {})
   const canNext = night && night.latest_date !== null && night.date < night.latest_date
+  // Switching to p0 refetches; keep showing Q until the p0 waterfall arrives.
+  const shown: Quantity = quantity === "p0" && !data?.quicklook.waterfall_p0 ? "q" : quantity
+  const commitPick = () => {
+    if (/^(19|20)\d\d-\d\d-\d\d$/.test(pick) && pick !== (night?.date ?? date)) go(pick)
+  }
 
   return (
     <div className="d-flex flex-column p-3 gap-3">
@@ -70,13 +83,15 @@ export default function LastNight() {
             onClick={() => night && go(shiftDate(night.date, -1))}>← Previous</button>
           <button className="btn btn-outline-primary" disabled={!canNext}
             onClick={() => night && go(shiftDate(night.date, 1))}>Next →</button>
-          <button className="btn btn-outline-primary" disabled={!night || night.is_latest}
+          <button className="btn btn-outline-primary" disabled={!date}
             onClick={() => go(null)}>Latest</button>
         </div>
         <input type="date" className="form-control form-control-sm w-auto"
-          aria-label="Choose a night" value={night?.date ?? date ?? ""}
+          aria-label="Choose a night" value={pick}
           max={night?.latest_date ?? undefined}
-          onChange={(e) => e.target.value && go(e.target.value)} />
+          onChange={(e) => setPick(e.target.value)}
+          onBlur={commitPick}
+          onKeyDown={(e) => { if (e.key === "Enter") commitPick() }} />
         <div className="btn-group btn-group-sm" role="group" aria-label="Waterfall quantity">
           {(["q", "p0"] as const).map((k) => (
             <button key={k} className={`btn ${quantity === k ? "btn-primary" : "btn-outline-primary"}`}
@@ -110,11 +125,11 @@ export default function LastNight() {
             </div>
           )}
           <div className="border rounded p-2">
-            <NightFigure data={data} quantity={quantity} />
+            <NightFigure data={data} quantity={shown} />
             <p className="text-muted small mb-0 px-2">
-              Uncalibrated quick-look products. Waterfall: {data.quicklook.n_rows} cycles
+              Uncalibrated quick-look products. Waterfall: {data.quicklook.n_cycles ?? 0} cycles
               {data.quicklook.decimation && data.quicklook.decimation > 1
-                ? ` (averaged ${data.quicklook.decimation} per row)` : ""}
+                ? ` (averaged up to ${data.quicklook.decimation} per row, ${data.quicklook.n_rows} rows)` : ""}
               {" "}from {data.quicklook.files?.length ?? 0} files
               {data.quicklook.missing_files?.length ? `; unreadable: ${data.quicklook.missing_files.join(", ")}` : ""}.
               Blank columns and broken lines are gaps in the data.

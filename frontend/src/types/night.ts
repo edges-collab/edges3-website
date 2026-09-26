@@ -33,7 +33,8 @@ export type Coverage = {
 export type QuickLook = {
   available: boolean
   reason: string | null
-  n_rows: number
+  n_cycles: number
+  n_rows: number // after decimation
   time_unix?: (number | null)[]
   lst_hour?: (number | null)[]
   freq_mhz?: (number | null)[]

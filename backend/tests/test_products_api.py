@@ -9,7 +9,7 @@ import sys
 
 import numpy as np
 import pytest
-from conftest import CYCLE_S, NIGHT, T_A, T_B, T_BAD, T_C
+from conftest import CYCLE_S, NIGHT, T_A, T_B, T_BAD, T_C, T_DAY
 
 import products_api
 
@@ -32,6 +32,32 @@ def test_insert_gaps():
     assert len(t3) == 4
 
 
+def test_decimate_segments_respects_gaps():
+    t = np.array([0.0, 10, 20, 30, 40, 1000, 1010, 1020])
+    lst = np.array([23.9, 23.95, 0.0, 0.05, 0.1, 5.0, 5.05, 5.1])
+    t2, cols = products_api.decimate_segments(t, {"lst_hour": lst, "x": t}, 2)
+    # groups stay within [0..40] and [1000..1020]
+    assert list(t2) == [5, 25, 40, 1005, 1020]
+    assert list(cols["x"]) == [5, 25, 40, 1005, 1020]
+    assert cols["lst_hour"][0] == pytest.approx(23.925)  # circular mean
+    assert cols["lst_hour"][1] == pytest.approx(0.025)
+
+
+def test_badges_midnight_split():
+    row = {
+        "has_l1": True, "has_ql": True, "n_cycles": 310, "t_start_unix": 0.0,
+        "t_end_unix": T_A.replace(hour=23, minute=59, second=0).timestamp(),
+        "total_data_drops": 0, "n_adc_clip_cycles": 0, "rfi_occupancy": 0.001,
+        "n_outlier_cycles": 0, "n_nonfinite": 0,
+    }
+    texts = [b["text"] for b in products_api._badges(row, 450, False)]
+    assert texts == ["ends at the UTC-midnight file split"]
+    row["t_end_unix"] -= 3600
+    assert [b["text"] for b in products_api._badges(row, 450, False)] == ["short (310 cycles)"]
+    row["has_l1"] = False
+    assert "no L1 (failed)" in [b["text"] for b in products_api._badges(row, 450, True)]
+
+
 def test_nights_latest(client):
     r = client.get("/api/nights/latest")
     assert r.status_code == 200
@@ -40,6 +66,9 @@ def test_nights_latest(client):
     assert d["timezone"] == "AWST"
     assert d["end_unix"] - d["start_unix"] == 12 * 3600
     assert d["start_unix"] == T_A.replace(hour=10, minute=0).timestamp()  # 18:00 AWST
+    # the latest data (T_DAY, 13:00 AWST next day) is not in any night: the
+    # library's latest_night() gives the empty coming night; we step back
+    assert T_DAY.timestamp() > d["end_unix"]
 
 
 def test_night_payload(client):
@@ -116,8 +145,17 @@ def test_night_by_date_outside_coverage(client):
 
 def test_night_decimation(client):
     d = client.get("/api/night", params={"date": NIGHT, "max_rows": 30}).json()
-    assert d["quicklook"]["decimation"] == 3
-    assert d["quicklook"]["n_rows"] == 30
+    ql = d["quicklook"]
+    assert ql["decimation"] == 3 and ql["n_cycles"] == 90
+    # 40 + 40 + 10 cycles in three gap-free segments -> 14 + 14 + 4 rows
+    assert ql["n_rows"] == 32
+    wf = _decode(ql["waterfall_q"])
+    t = np.array(ql["time_unix"], dtype=float)
+    data_t = t[~np.isnan(wf).all(axis=1)]
+    spans = [(T_A, 40), (T_B, 40), (T_C, 10)]
+    assert all(
+        any(s.timestamp() <= x <= s.timestamp() + n * CYCLE_S for s, n in spans) for x in data_t
+    )  # no averaged rows inside gaps
 
 
 @pytest.mark.parametrize(
@@ -125,6 +163,8 @@ def test_night_decimation(client):
     [
         ("/api/night", {"date": "2025-13-01"}),
         ("/api/night", {"date": "yesterday"}),
+        ("/api/night", {"date": "9999-12-31"}),
+        ("/api/quicklook", {"start": "2025-04-01", "end": "2025-04-05", "p0": "true"}),
         ("/api/quicklook", {"start": "2025-04-10", "end": "2025-04-01"}),
         ("/api/quicklook", {"start": "2025-04-01", "end": "2025-04-20"}),
         ("/api/quicklook", {"start": "soon", "end": "2025-04-20"}),
@@ -151,8 +191,27 @@ def test_range_endpoints(client):
 def test_status(client):
     d = client.get("/api/status").json()
     assert d["available"]
-    assert d["ql"]["n_files"] == 3
-    assert d["l1"]["n_files"] == 3
+    assert d["ql"]["n_files"] == 4
+    assert d["l1"]["n_files"] == 4
+
+
+def test_database_missing(tmp_path):
+    from edges_pipeline.config import Settings
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    products_api.configure(Settings(tmp_path / "c.sqlite", tmp_path / "p.sqlite", tmp_path))
+    try:
+        app = FastAPI()
+        app.include_router(products_api.router)
+        client = TestClient(app)
+        for path in ("/api/night", "/api/nights/latest", "/api/night?date=2025-04-10"):
+            r = client.get(path)
+            assert r.status_code == 503, path
+            assert "unavailable" in r.json()["detail"]
+        assert client.get("/api/status").json()["available"] is False
+    finally:
+        products_api.configure(None)
 
 
 def test_packages_missing(client, monkeypatch):
