@@ -11,7 +11,7 @@ FastAPI service + the EDGES-3 calibration/temperature pipeline.
 | `run_single_day.py` | The actual EDGES pipeline: receiver cal, S11 modelling, Dicke + linear frontend calibration, antenna temp, per-load actual temp matching. Writes the manifest + per-run npz/jpg trees. |
 | `products_api.py` | Read-only `/api/*` endpoints (`/api/night`, `/api/nights/latest`, `/api/quicklook`, `/api/l1`, `/api/housekeeping`, `/api/status`) over the catalog and pipeline products. Needs the optional `edges-catalog`/`edges-pipeline` packages. |
 | `tests/` | pytest tests of `products_api.py` on a synthetic catalog. |
-| `scan_dates.py` | Walks the raw data tree and writes `available_dates.json` so the UI can list what's runnable. |
+| `catalog_inputs.py` | Dates, input files, S11 sessions and probe temperatures for the calibration flow, from the EDGES catalog (nothing scans the raw data tree). |
 | `io_utils.py` | Shared dataclasses (`Plot`), deterministic run-hash, manifest writer. |
 | `requirements.txt` | Every Python dep, installed via `uv pip install`. |
 
@@ -29,14 +29,15 @@ python -m uvicorn backend_api:app --host 127.0.0.1 --port 8003
 
 ```bash
 python run_single_day.py \
-    --cal-date 2026_227 \
-    --s11-date 2026_242_23 \
-    --spec-date 2026_244_22_24_54 \
-    --source user
+    --cal_date 2026_267 \
+    --spec_date 2026_268_12_15_02 \
+    --output_root /path/to/outputs --run_dir /path/to/outputs/runs/manual
 ```
 
-The script prints a probe survey, then derived calibration temperatures,
-then the linear-frontend calibration. The manifest lands in
+The inputs are resolved in the catalog (`--s11_date` defaults to the
+catalog's pick) and written to `<run_dir>/inputs.json`; `--inputs FILE`
+reuses such a file. The script prints the input issues and calibration
+temperatures, then the linear-frontend calibration. The manifest lands in
 `$EDGES_OUTPUT_ROOT/manifest.json`.
 
 ## Path configuration cheat sheet
@@ -45,9 +46,8 @@ then the linear-frontend calibration. The manifest lands in
 sensible defaults for the SSH cluster. Override any of these:
 
 ```bash
-export EDGES_RAW_DATA_ROOT=/path/to/mro
+export EDGES_PIPELINE_ROOT=/path/to/edges-db   # catalog + products
 export EDGES_OUTPUT_ROOT=/path/to/outputs
-export EDGES_TEMP_LOG_DIR=/path/to/temperature_logger
 python -m uvicorn backend_api:app --host 127.0.0.1 --port 8003
 ```
 

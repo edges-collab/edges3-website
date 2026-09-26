@@ -56,11 +56,14 @@ Verify the install:
 python backend/config.py    # prints every resolved path + probe number
 ```
 
-### 2b. Optional — catalog and pipeline products ("Last night" page)
+### 2b. Catalog and pipeline products
 
-The **Last night** page (the home page, `/`) and the read-only `/api/*`
-endpoints read precomputed quick-look (QL) and L1 QA products and the
-data catalog through two packages that are **not published yet**:
+The site finds data through the EDGES **catalog** and the pipeline's
+precomputed products, never by scanning the raw data tree: the **Last
+night** page (the home page, `/`) reads quick-look (QL) and L1 QA
+products, and the **Select**/calibration flow takes its dates, input files
+and probe temperatures from the catalog. Both use two packages that are
+**not published yet**:
 `edges-catalog` and `edges-pipeline`. They are local git repositories
 on the EDGES server (ask the data maintainers for their location);
 install them pinned to their committed code (not editable):
@@ -71,8 +74,8 @@ uv pip install \
   "edges-pipeline @ git+file:///path/to/edges-pipeline"
 ```
 
-Without them the rest of the site works as before and `/api/*` returns
-503 with an install hint. The products and the catalog live under
+Without them the Last night page, the date lists and the calibration
+flow return 503 with an install hint. The products and the catalog live under
 `EDGES_PIPELINE_ROOT` (default `/data6/edges/edges-db`); run the backend
 as a member of the `loco` group, since the SQLite (WAL) databases need
 their group-writable `-wal`/`-shm` files even for read-only access.
@@ -233,7 +236,7 @@ the top of any data page; the resulting zip lives at
 | `backend/run_single_day.py` | The actual EDGES calibration + temperature pipeline |
 | `backend/products_api.py` | Read-only `/api/*` endpoints over the catalog and pipeline products (Last night page) |
 | `backend/tests/` | pytest tests of `/api/*` on a small synthetic catalog |
-| `backend/scan_dates.py` | Scans the raw-data tree and writes `available_dates.json` |
+| `backend/catalog_inputs.py` | Dates, input files, S11 sessions and probe temperatures for the calibration flow, from the catalog (replaces the old raw-directory scan) |
 | `backend/io_utils.py` | Shared dataclasses (`Plot`), hashing, manifest writing |
 | `backend/requirements.txt` | Every Python dep, installed via `uv pip install` |
 | `frontend/` | React + Vite SPA |
@@ -255,22 +258,24 @@ launching the backend.
 |---|---|---|
 | `EDGES_RAW_DATA_ROOT` | `/data5/edges/data/EDGES3_data/MRO` | Root of the raw `.acq` + `.log` tree the pipeline reads |
 | `EDGES_OUTPUT_ROOT` | `<repo>/outputs` | Where the manifest, runs, saved zips, and run history are written |
-| `EDGES_TEMP_LOG_FILE` | `$EDGES_RAW_DATA_ROOT/temperature_logger/temperature.log` | Single-file temperature log (legacy) |
-| `EDGES_TEMP_LOG_DIR` | `$EDGES_TEMP_LOG_FILE`'s parent | Directory of log files; every `*.log`, `*.backup`, and `*.txt` in here is read and merged into one timeline |
 | `EDGES_BEAM_FACTOR_FILE` | `/data4/vydula/edges/packages/edges3-data-analysis/data/e3_beam_factor.hickle` (canonical; falls back to `<RAW_DATA_ROOT>/../../../e3_beam_factor.hickle` then `/mnt/data5/...`, `/scratch/...`, `$HOME/edges/...`) | Path to the EDGES-3 antenna beam factor file. Required for the absolute temperature calibration; the canonical path ships with the `edges-3-data-analysis` package. Set this explicitly only if the file lives somewhere else. |
 | `EDGES_PIPELINE_ROOT` | `/data6/edges/edges-db` | Where the catalog (`catalog.sqlite`), products database (`products.sqlite`) and QL/L1 products live (read by `/api/*`; read only) |
 | `EDGES_PYTHON` | current interpreter (`sys.executable`) | Python the backend shells out to when running the pipeline |
-| `EDGES_PROBE_AMBIENT` | `100` | Temperature-log probe for ambient cal |
-| `EDGES_PROBE_HOT` | `102` | Temperature-log probe for hot cal |
-| `EDGES_PROBE_LNA` | `100` | Temperature-log probe for LNA cal |
-| `EDGES_PROBE_COLD_LOAD` | `152` | Temperature-log probe for the cold load (informational) |
+| `EDGES_PROBE_AMBIENT` | `100` | Temperature-log code for the ambient-load cal (100 is the *front end*; see [Open questions](#open-questions)) |
+| `EDGES_PROBE_HOT` | `102` | Temperature-log code for the hot-load cal |
+| `EDGES_PROBE_LNA` | `100` | Temperature-log code for the LNA / cable |
+| `EDGES_PROBE_COLD_LOAD` | `152` | Code 152 is `pr59_current`, **not a temperature**; informational only, not used by the calibration |
 | `EDGES_ALLOWED_ORIGINS` | `http://localhost:5173, http://127.0.0.1:5173, http://localhost:8003, http://127.0.0.1:8003` | Comma-separated CORS allowlist for the API. Loopback origins are always allowed; when the SPA is hosted on a different host than the backend, set this to the SPA's origin (e.g. `https://edges.example.com`). Never set it to `*`. |
 
-Calibration temperatures are auto-derived from the temperature log at
-the matching calibration time and passed straight to the EDGES receiver
-calibration — there are no user-tunable setpoints. If no probe reading
-is available at the calibration time the pipeline falls back to
-internal constants (`306.5`, `393.22`, `306.5` K) and logs a warning.
+Calibration temperatures are the probe readings at the time of each
+calibration spectrum, from the catalog's housekeeping (de-duplicated, and
+without the logs of other receivers such as the Adak system), and are
+passed straight to the EDGES receiver calibration — there are no
+user-tunable setpoints. For each spectrum: the `.tmp` snapshot of that
+load at the hour of its time stamp; else the nearest temperature-log
+reading of *that* probe within 15 minutes; else the internal constants
+(`306.5`, `393.22`, `306.5` K), which the Select page and the run banner
+report as an issue.
 
 The values above are documented programmatically in
 `backend/config.py::describe()`. Run `python backend/config.py` to print
@@ -294,8 +299,8 @@ If you blow it away, the next user run will rebuild it from scratch.
 outputs/
 ├── manifest.json             # Latest manifest (mirrors runs/<run_id>/manifest.json)
 ├── latest_run.json           # {source, run_id, dates, generated_at, parameters, has_2d, …}
-├── available_dates.json      # Scanned by scan_dates.py on backend startup
 ├── runs/<run_id>/            # One folder per user-triggered run
+│   ├── inputs.json                 # files, temperatures and issues, from the catalog
 │   ├── calibration/
 │   ├── calibration_s11/
 │   ├── calibration_spectra/
@@ -314,17 +319,16 @@ outputs/
 
 ## Pipeline steps (what `run_single_day.py` does, top to bottom)
 
-For a given `(cal_date, s11_date, spec_date)` triple the pipeline runs:
+For a given `(cal_date, s11_date, spec_date)` triple the backend first
+resolves the inputs in the catalog (`catalog_inputs.resolve_inputs`: the
+four calibration spectra, the antenna spectrum, the S11 session's files,
+the probe temperatures and any issues) and writes them to
+`runs/<id>/inputs.json`. The pipeline then runs:
 
 1. Load the four `.acq` calibration files (amb / hot / open / short) and
-   the antenna `.acq`.
-2. Merge every `*.log` / `*.backup` / `*.txt` in
-   `EDGES_TEMP_LOG_DIR` into one timeline of probe readings.
-3. Look up the calibration temperatures:
-   * Primary: the `.tmp` snapshot file written at the moment of the
-     cal/obs (e.g. `2026_227_05_amb.tmp`).
-   * Fallback: nearest-in-time reading in the merged temperature log.
-   * Final fallback: the internal default constants.
+   the antenna `.acq` named in `inputs.json`.
+2. (Removed: temperature logs are no longer parsed or merged here.)
+3. Take the calibration temperatures from `inputs.json` (see above).
 4. Run the EDGES receiver calibration
    (`alancal_edges3`) — writes `calibration/specal.txt` and
    `calibration/s11_modelled.txt`.
@@ -370,15 +374,18 @@ python -m pytest tests
 
 ```bash
 cd backend
-EDGES_RAW_DATA_ROOT=/path/to/mro \
 EDGES_OUTPUT_ROOT=/path/to/outputs \
 python run_single_day.py \
-    --cal-date 2026_227 --s11-date 2026_242_23 --spec-date 2026_244_22_24_54 \
-    --source user
+    --cal_date 2026_267 --spec_date 2026_268_12_15_02 \
+    --output_root /path/to/outputs --run_dir /path/to/outputs/runs/manual
 ```
 
-Run with `--help` to see every tunable (`cterms`, `wterms`,
-`fstart`/`fstop`, `wfstart`/`wfstop`, `save_2d_npz`, `--run-hash`, …).
+The dates are resolved in the catalog as the backend does (`--s11_date`
+defaults to the session the catalog recommends for the calibration day),
+and the resolved inputs are written to `<run_dir>/inputs.json`; or pass
+`--inputs inputs.json` from a previous run. Run with `--help` to see every
+tunable (`cterms`, `wterms`, `fstart`/`fstop`, `wfstart`/`wfstop`,
+`save_2d_npz`, `--run_hash`, …).
 
 ### Triggering the pipeline from the UI
 
@@ -418,6 +425,19 @@ saved zips, run history) go to `OUTPUT_ROOT` which is separate and
 gitignored.
 
 ---
+
+## Open questions
+
+To confirm with the team (the defaults are unchanged for now):
+
+* **Ambient-load probe.** `EDGES_PROBE_AMBIENT` defaults to code 100,
+  which the catalog and `edges-analysis` call `front_end_temperature`;
+  code 101 is `amb_load_temperature`. Should the ambient-load calibration
+  temperature (`tcold`) use 101? (The LNA/cable probe, 100, looks right.)
+* **Code 152** is `pr59_current`, not a cold-load temperature; the site
+  keeps `EDGES_PROBE_COLD_LOAD` only for information.
+* **Code 0** is the thermal setpoint (35 °C for most of the record, 25 °C
+  since ~2026-08; inferred by the data side).
 
 ## Troubleshooting
 

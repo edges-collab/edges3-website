@@ -184,10 +184,19 @@ export default function LatestRunBanner({ pageTitle }: BannerProps) {
         </div>
       )}
 
+      {(latest.input_issues ?? []).length > 0 && (
+        <div className="alert alert-warning py-2 mb-0 small">
+          <strong>Input issues (from the catalog):</strong>
+          <ul className="mb-0">
+            {(latest.input_issues ?? []).map((i) => <li key={i}>{i}</li>)}
+          </ul>
+        </div>
+      )}
+
       {tempLines.length > 0 && (
         <div className="small">
           <div className="text-muted">
-            Probe readings from the temperature log at each calibration time:
+            Probe readings (catalog housekeeping) at each calibration time:
           </div>
           <ul className="mb-0 ps-3">
             {tempLines.map((line) => (

@@ -196,8 +196,8 @@ def test_range_endpoints(client):
 def test_status(client):
     d = client.get("/api/status").json()
     assert d["available"]
-    assert d["ql"]["n_files"] == 4
-    assert d["l1"]["n_files"] == 4
+    assert d["ql"]["n_files"] == 4  # antenna files only
+    assert d["l1"]["n_files"] == 8  # plus the four calibration loads
 
 
 def test_database_missing(tmp_path):

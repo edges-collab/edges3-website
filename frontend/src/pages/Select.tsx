@@ -1,6 +1,7 @@
 import { useState } from "react"
 import DatePanel from "../components/DatePanel"
 import ParameterPanel, { type ParameterSet } from "../components/ParameterPanel"
+import InputsPreview from "../components/InputsPreview"
 
 const allParameters: ParameterSet = [
   { name: "cterms", type: "number", defaultValue: 6 },
@@ -25,6 +26,7 @@ export default function Select() {
         dateSet={{ calDate: [], s11Date: [], rawDate: [] }}
         onDatesChange={setSelectedDates}
       />
+      <InputsPreview dates={selectedDates} />
       <ParameterPanel
         parameterSet={allParameters}
         selectedDates={selectedDates}

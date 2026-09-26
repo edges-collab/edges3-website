@@ -41,7 +41,6 @@ import os
 import sqlite3
 import threading
 import time
-import warnings
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 

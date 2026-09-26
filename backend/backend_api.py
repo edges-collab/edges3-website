@@ -4,13 +4,14 @@ EDGES-3 Web API
 
 Endpoints
 ---------
-GET  /available_dates        List of dates per category (cached on disk)
+GET  /available_dates        Dates per category, from the catalog (cached in memory)
 GET  /manifest.json          The manifest for the currently displayed run
 GET  /latest_run             JSON pointer to the currently displayed run
 POST /run_pipeline           Trigger a user-run with custom dates / parameters
 POST /save_outputs           Bundle the current outputs into a downloadable zip
 GET  /download/<name>        Download a previously saved zip
 GET  /health                 Liveness probe
+GET  /api/calibration/inputs Preview of a run's inputs (files, temperatures, issues)
 GET  /api/...                Read-only catalog/products endpoints (see products_api.py)
 
 Static files
@@ -23,6 +24,13 @@ The built SPA is served from ``frontend/dist/`` at ``/`` with a
 catch-all fallback that returns ``index.html`` for React Router paths
 like ``/Select``.
 
+Inputs
+------
+Dates, input files and calibration temperatures come from the EDGES
+catalog (``catalog_inputs.py``); the backend never scans the raw data
+tree. Each run's resolved inputs are written to ``<run_dir>/inputs.json``
+and passed to ``run_single_day.py --inputs``.
+
 Concurrency
 -----------
 A single ``RunLock`` serialises pipeline runs so that two simultaneous
@@ -31,6 +39,7 @@ clicks cannot clobber each other.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import logging
@@ -42,6 +51,7 @@ import sys
 import threading
 import time
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -53,9 +63,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import catalog_inputs  # noqa: E402
 import config  # noqa: E402
 import products_api  # noqa: E402
-import scan_dates  # noqa: E402
 from io_utils import compute_run_hash  # noqa: E402
 
 
@@ -148,41 +158,46 @@ def _write_json(path: Path, payload: Any) -> None:
         json.dump(payload, f, indent=2)
 
 
-def _resolve_dates(dates_in: Dict[str, str], available: Dict[str, List[str]]) -> Dict[str, str]:
-    out: Dict[str, str] = {}
-    for key, list_key in (("cal", "calibration"), ("s11", "s11"), ("raw", "raw")):
-        v = dates_in.get(key, "Latest") or "Latest"
-        if v == "Latest":
-            choices = available.get(list_key, [])
-            if not choices:
-                raise HTTPException(status_code=400, detail=f"No {list_key} dates available")
-            out[key] = choices[-1]
-        else:
-            if v not in available.get(list_key, []):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Unknown {list_key} date: {v!r}",
-                )
-            out[key] = v
-    return out
+# Available dates change only when the catalog is updated (twice a day).
+AVAILABLE_DATES_TTL_S = 300
+_dates_cache: Dict[str, Any] = {"expires": 0.0, "value": None}
+_dates_lock = threading.Lock()
 
 
-def _ensure_dates_scanned(force: bool = False) -> Dict[str, List[str]]:
-    """Refresh the on-disk dates cache if it's missing or older than 1 hour."""
-    cache = config.AVAILABLE_DATES_FILE
-    stale = True
-    if cache.exists() and not force:
-        age = time.time() - cache.stat().st_mtime
-        stale = age > 3600  # 1 hour
-    if stale:
-        dates = scan_dates.scan_all(config.RAW_DATA_ROOT)
-        scan_dates.write_results(dates, cache)
-    payload = _read_json(cache, {})
-    return {
-        "calibration": payload.get("calibration", []),
-        "s11": payload.get("s11", []),
-        "raw": payload.get("raw", []),
-    }
+@contextmanager
+def _catalog():
+    """A per-request catalog connection; missing packages/DB -> 503, bad input -> 400."""
+    try:
+        with products_api._db_errors(), catalog_inputs.open_catalog() as cat:
+            yield cat
+    except catalog_inputs.InputError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+
+
+def _available_dates(cat: Any, force: bool = False) -> Dict[str, List[str]]:
+    with _dates_lock:
+        if not force and _dates_cache["value"] and _dates_cache["expires"] > time.monotonic():
+            return _dates_cache["value"]
+    value = catalog_inputs.available_dates(cat)
+    with _dates_lock:
+        _dates_cache.update(value=value, expires=time.monotonic() + AVAILABLE_DATES_TTL_S)
+    return value
+
+
+def _resolve_run_inputs(dates_in: Dict[str, str]) -> Dict[str, Any]:
+    """Resolve the Select page's dates and look up the run's inputs in the catalog."""
+    with _catalog() as cat:
+        resolved = catalog_inputs.resolve_dates(cat, dates_in, _available_dates(cat))
+        return catalog_inputs.resolve_inputs(cat, resolved)
+
+
+def _inputs_digest(inputs: Dict[str, Any]) -> str:
+    """Fingerprint of the files and temperatures a run uses (part of the dedup key)."""
+    blob = json.dumps(
+        {"files": inputs["files"], "temperatures": inputs["temperatures"]},
+        sort_keys=True, default=str,
+    )
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +217,7 @@ def _prune_old_runs(keep: Optional[str] = None) -> int:
     Called *after* a successful run (never before it), so a pipeline
     failure leaves the previously displayed outputs, manifest and
     ``latest_run.json`` intact instead of destroying them first.
-    ``saved/``, ``user_cache/`` and ``available_dates.json`` are never
+    ``saved/`` and ``user_cache/`` are never
     touched.
     """
     removed = 0
@@ -296,6 +311,9 @@ def _write_latest(run_id: str, dates: Dict[str, str]) -> None:
     }
     if actual_temps:
         payload["actual_temperatures"] = actual_temps
+    # What the catalog flagged about this run's inputs (see catalog_inputs).
+    inputs = _read_json(run_dir / "inputs.json", {})
+    payload["input_issues"] = inputs.get("issues", []) if isinstance(inputs, dict) else []
     # Only the current run counts — rglob-ing OUTPUT_ROOT would also match
     # the stashed previous run in user_cache/ and report stale 2D data.
     payload["has_2d"] = run_dir.exists() and any(run_dir.rglob("*_2d.npz"))
@@ -360,7 +378,7 @@ def _execute_subprocess(cmd: List[str]) -> None:
 
 
 def _build_pipeline_cmd(
-    resolved: Dict[str, str],
+    inputs_file: Path,
     merged: Dict[str, Any],
     output_root: Path,
     run_dir: Path,
@@ -368,13 +386,9 @@ def _build_pipeline_cmd(
 ) -> List[str]:
     cmd = [
         config.PYTHON, str(config.RUN_SCRIPT),
-        "--cal_date", resolved["cal"],
-        "--s11_date", resolved["s11"],
-        "--spec_date", resolved["raw"],
-        "--rawdata_root", str(config.RAW_DATA_ROOT),
+        "--inputs", str(inputs_file),
         "--output_root", str(output_root),
         "--run_dir", str(run_dir),
-        "--temperature_log", str(config.TEMPERATURE_LOG_FILE),
         "--source", "user",
         "--run_hash", run_hash,
     ]
@@ -412,8 +426,8 @@ def run_pipeline(
         under a new timestamped run id, then rewrites the manifest pointing
         at that run.
     """
-    available = _ensure_dates_scanned()
-    resolved = _resolve_dates(dates, available)
+    inputs = _resolve_run_inputs(dates)
+    resolved = inputs["dates"]
     merged = {**PIPELINE_DEFAULTS, **parameters}
     # A cleared/empty input field arrives as ``null`` (JSON has no NaN);
     # falling back to the defaults keeps a stray ``None`` from being
@@ -423,7 +437,9 @@ def run_pipeline(
         if not isinstance(v, (int, float)) or not math.isfinite(v):
             merged[k] = PIPELINE_DEFAULTS[k]
 
-    run_hash = compute_run_hash(resolved, merged)
+    # The inputs digest makes a changed catalog (new files, corrected
+    # temperatures) a new run instead of reusing stale outputs.
+    run_hash = compute_run_hash(resolved, {**merged, "inputs": _inputs_digest(inputs)})
 
     config.OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -494,7 +510,9 @@ def run_pipeline(
         reused_from = "user"
     else:
         # ---- Fresh pipeline run -----------------------------------------
-        cmd = _build_pipeline_cmd(resolved, merged, config.OUTPUT_ROOT, run_dir, run_hash)
+        inputs_file = run_dir / "inputs.json"
+        _write_json(inputs_file, inputs)
+        cmd = _build_pipeline_cmd(inputs_file, merged, config.OUTPUT_ROOT, run_dir, run_hash)
         _execute_subprocess(cmd)
 
     _write_latest(run_id, resolved)
@@ -513,6 +531,7 @@ def run_pipeline(
         "manifest": f"{DATA_PREFIX}/manifest.json",
         "run_hash": run_hash,
         "reused_from": reused_from,
+        "issues": inputs["issues"],
     }
 
 
@@ -571,7 +590,6 @@ app.include_router(products_api.router)
 @app.on_event("startup")
 def _startup() -> None:
     config.ensure_dirs()
-    _ensure_dates_scanned()
 
 
 @app.get("/health")
@@ -581,7 +599,16 @@ def health() -> Dict[str, Any]:
 
 @app.get("/available_dates")
 def available_dates(force: bool = False) -> Dict[str, List[str]]:
-    return _ensure_dates_scanned(force=force)
+    with _catalog() as cat:
+        return _available_dates(cat, force=force)
+
+
+@app.get("/api/calibration/inputs")
+def calibration_inputs(
+    cal: str = "Latest", s11: str = "Latest", raw: str = "Latest"
+) -> Dict[str, Any]:
+    """What a run with these dates would use, and the catalog's issues with it."""
+    return _resolve_run_inputs({"cal": cal, "s11": s11, "raw": raw})
 
 
 @app.get("/latest_run")

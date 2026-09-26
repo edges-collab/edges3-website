@@ -109,4 +109,6 @@ export interface LatestRunInfo {
   /** Non-fatal pipeline warnings (e.g. S11 grid resampling) — empty
    *  array or undefined means the run was clean. */
   warnings?: S11GridWarning[]
+  /** Issues the catalog found with this run's inputs (see catalog_inputs.py). */
+  input_issues?: string[]
 }

@@ -14,6 +14,15 @@ The night of 2025-04-10 at the MRO (18:00-06:00 AWST = 10:00-22:00 UTC) has:
 - ``day`` 2025-04-11 05:00 UTC (13:00 AWST), 5 cycles: daytime data after
   the night, so ``Products.latest_night`` points at the (empty) next night;
 - a temperature log every 5 min over 10:00-11:00 and 12:30-13:30 UTC.
+
+A calibration day, 2025-04-12 (``2025_102``):
+
+- ``amb``/``hot``/``open``/``short`` spectra starting 03:00/04:00/05:00/06:00 UTC;
+- full averaged S11 sessions ``2025_102_02`` (the one to use) and
+  ``2025_101_05`` (the day before);
+- an ambient-load ``.tmp`` snapshot for 03:00 (probe 100 = 27 C);
+- a temperature log every 5 min over 03:30-06:30 UTC (hot load 111 C, probe
+  100 = 25 C), so the ambient spectrum has only its snapshot.
 """
 
 from __future__ import annotations
@@ -41,6 +50,12 @@ T_B = datetime(2025, 4, 10, 12, 0, 0, tzinfo=UTC)
 T_C = datetime(2025, 4, 10, 13, 0, 0, tzinfo=UTC)
 T_BAD = datetime(2025, 4, 10, 14, 0, 0, tzinfo=UTC)
 T_DAY = datetime(2025, 4, 11, 5, 0, 0, tzinfo=UTC)
+CAL_DAY = datetime(2025, 4, 12, tzinfo=UTC)
+CAL_DATE = "2025_102"
+S11_GOOD, S11_OLD = "2025_102_02", "2025_101_05"
+S11_LABELS = (
+    "amb", "hot", "open", "short", "L", "O", "S", "lna", "lna_L", "lna_O", "lna_S", "ant",
+)
 CYCLE_S = 23
 
 
@@ -54,7 +69,8 @@ def _acq_name(t: datetime) -> str:
 
 
 def write_acq(
-    root: Path, start: datetime, ncycles: int, seed: int = 0, clip_cycle=None, dropout_cycle=None
+    root: Path, start: datetime, ncycles: int, seed: int = 0, clip_cycle=None,
+    dropout_cycle=None, load: str = "ant",
 ) -> Path:
     from read_acq import encode
 
@@ -80,7 +96,7 @@ def write_acq(
         "adcmin": np.full((ncycles, 3), -0.25),
         "data_drops": np.zeros((ncycles, 3), dtype=int),
     }
-    path = root / "mro/ant" / str(start.year) / _acq_name(start)
+    path = root / f"mro/{load}" / str(start.year) / _acq_name(start).replace("_ant.", f"_{load}.")
     path.parent.mkdir(parents=True, exist_ok=True)
     encode(path, [p0, p1, p2], meta, anc)
     _age(path)
@@ -118,8 +134,21 @@ def build_env(tmp: Path):
     t0 = datetime(2025, 4, 10, 10, 0, 0, tzinfo=UTC)
     blocks = [t0 + timedelta(minutes=5 * i) for i in range(13)]
     blocks += [t0 + timedelta(hours=2.5, minutes=5 * i) for i in range(13)]
+    blocks += [CAL_DAY + timedelta(hours=3.5, minutes=5 * i) for i in range(37)]
     (tl / "temperature.log").write_text("".join(templog_block(t) for t in blocks))
     _age(tl / "temperature.log")
+
+    # the calibration day
+    for i, load in enumerate(("amb", "hot", "open", "short")):
+        write_acq(root, CAL_DAY + timedelta(hours=3 + i), 4, seed=10 + i, load=load)
+    freqs = np.linspace(40e6, 200e6, 151)
+    s1p = "BEGIN\nDB\n" + "\n".join(f"{f:.6f} -1.0 10.0" for f in freqs) + "\nEND\n"
+    for stem in (S11_GOOD, S11_OLD):
+        for label in S11_LABELS:
+            (root / f"{stem}_{label}.s1p").write_text(s1p)
+            _age(root / f"{stem}_{label}.s1p")
+    (root / f"{CAL_DATE}_03_amb.tmp").write_text("100 +2.7e+01\n102 +1.11e+02\n")
+    _age(root / f"{CAL_DATE}_03_amb.tmp")
 
     out = tmp / "out"
     cfg = Config.from_dict({

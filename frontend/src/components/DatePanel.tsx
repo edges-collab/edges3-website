@@ -37,8 +37,11 @@ export default function DatePanel({ dateSet, onDatesChange }: DatePanelProps) {
     setLoading(true)
     setError(null)
     fetch(`${BASE_URL}/available_dates`, { cache: "no-store" })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      .then(async (res) => {
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}))
+          throw new Error(body.detail ?? `HTTP ${res.status}`)
+        }
         return res.json() as Promise<AvailableDates>
       })
       .then((data) => {
@@ -73,6 +76,8 @@ export default function DatePanel({ dateSet, onDatesChange }: DatePanelProps) {
   }
 
   const withLatest = (arr: string[]) => ["Latest", ...(arr ?? [])]
+  // "Latest" is resolved by the backend from the catalog (see catalog_inputs.py).
+  const latestLabel = { cal: "Latest", s11: "Auto (recommended for the calibration day)", raw: "Latest (≥ 100 cycles)" }
 
   return (
     <div className="p-3 border rounded">
@@ -84,7 +89,7 @@ export default function DatePanel({ dateSet, onDatesChange }: DatePanelProps) {
         <span>Calibration Date</span>
         <select value={selectedCal} onChange={(e) => handleChange("cal", e.target.value)}>
           {withLatest(available.calibration).map((date) => (
-            <option key={date} value={date}>{date}</option>
+            <option key={date} value={date}>{date === "Latest" ? latestLabel.cal : date}</option>
           ))}
         </select>
       </div>
@@ -93,7 +98,7 @@ export default function DatePanel({ dateSet, onDatesChange }: DatePanelProps) {
         <span>S11 Date</span>
         <select value={selectedS11} onChange={(e) => handleChange("s11", e.target.value)}>
           {withLatest(available.s11).map((date) => (
-            <option key={date} value={date}>{date}</option>
+            <option key={date} value={date}>{date === "Latest" ? latestLabel.s11 : date}</option>
           ))}
         </select>
       </div>
@@ -102,13 +107,15 @@ export default function DatePanel({ dateSet, onDatesChange }: DatePanelProps) {
         <span>Raw Data Date</span>
         <select value={selectedRaw} onChange={(e) => handleChange("raw", e.target.value)}>
           {withLatest(available.raw).map((date) => (
-            <option key={date} value={date}>{date}</option>
+            <option key={date} value={date}>{date === "Latest" ? latestLabel.raw : date}</option>
           ))}
         </select>
       </div>
 
       <p className="text-muted small mb-0 mt-2">
-        Pick a specific date or leave on "Latest" to use the most recent available one.
+        Dates, S11 sessions and antenna files come from the EDGES catalog. Leave
+        on "Latest"/"Auto" to use the most recent calibration day, the S11 session the
+        catalog recommends for it, and the most recent complete antenna file.
       </p>
     </div>
   )

@@ -7,21 +7,24 @@ All paths are environment-driven so the same code runs:
 
 Environment variables (all optional):
 
-  EDGES_RAW_DATA_ROOT       Raw MRO data root. Default: /data5/edges/data/EDGES3_data/MRO
+  EDGES_RAW_DATA_ROOT       Raw MRO data root (read only; the catalog normally
+                             supplies it). Default: /data5/edges/data/EDGES3_data/MRO
+  EDGES_PIPELINE_ROOT       Catalog + pipeline products (read only), used by
+                             edges-catalog / edges-pipeline. Default: /data6/edges/edges-db
   EDGES_OUTPUT_ROOT         Where outputs and the manifest live.
                              Default: <repo>/outputs
-  EDGES_TEMP_LOG_FILE       Path to a specific temperature.log (legacy)
-  EDGES_TEMP_LOG_DIR        Directory containing one or more temperature log
-                             files; every ``*.log`` (plus ``*.backup`` and
-                             ``*.txt``) in this directory is read and merged
-                             into one timeline.
   EDGES_BEAM_FACTOR_FILE    Path to the EDGES-3 antenna beam factor file
                              (``e3_beam_factor.hickle``). Required for the
                              absolute temperature calibration.
-  EDGES_PROBE_AMBIENT       Temperature-log probe for ambient cal (default 100)
-  EDGES_PROBE_HOT           Temperature-log probe for hot cal     (default 102)
-  EDGES_PROBE_LNA           Temperature-log probe for LNA / cable (default 100)
-  EDGES_PROBE_COLD_LOAD     Temperature-log probe for cold load  (default 152)
+  EDGES_PROBE_AMBIENT       Temperature-log code for ambient cal (default 100)
+  EDGES_PROBE_HOT           Temperature-log code for hot cal     (default 102)
+  EDGES_PROBE_LNA           Temperature-log code for LNA / cable (default 100)
+  EDGES_PROBE_COLD_LOAD     Code 152 = pr59_current, NOT a temperature
+                             (informational only; default 152)
+
+Input files, S11 sessions and temperature readings come from the catalog
+(``catalog_inputs.py``); nothing scans the raw data tree or merges
+temperature-log files any more.
 
 The pipeline is user-triggered only — there is no daemon, no scheduler,
 no systemd unit. The backend runs under ``uvicorn`` and the frontend is
@@ -53,24 +56,6 @@ RAW_DATA_ROOT: Path = Path(
     )
 ).expanduser().resolve()
 
-TEMPERATURE_LOG_FILE: Path = Path(
-    os.environ.get(
-        "EDGES_TEMP_LOG_FILE",
-        str(RAW_DATA_ROOT / "temperature_logger" / "temperature.log"),
-    )
-).expanduser().resolve()
-
-# Directory containing one or more temperature logs. Every ``*.log`` file
-# in this directory is read, so multiple log files (one per session, day,
-# or sensor) all contribute to the lookup.
-TEMPERATURE_LOG_DIR: Path = Path(
-    os.environ.get(
-        "EDGES_TEMP_LOG_DIR",
-        str(TEMPERATURE_LOG_FILE.parent),
-    )
-).expanduser().resolve()
-
-
 # ---------------------------------------------------------------------------
 # Beam factor file
 # ---------------------------------------------------------------------------
@@ -81,8 +66,8 @@ def _default_beam_factor_file() -> Path:
 
       1. The canonical edges-3-data-analysis package location
          (``/data4/vydula/edges/packages/edges3-data-analysis/data/e3_beam_factor.hickle``).
-      2. The great-grandparent of the live ``temperature.log``
-         (e.g. ``data5/edges/e3_beam_factor.hickle``).
+      2. Two levels above the raw data root
+         (e.g. ``/data5/edges/e3_beam_factor.hickle``).
       3. Linux dev mounts (``/mnt/...``, ``/scratch/...``).
       4. ``$HOME/edges/...``.
     """
@@ -93,8 +78,8 @@ def _default_beam_factor_file() -> Path:
     )
     if canonical.exists():
         return canonical
-    # 2. great-grandparent of temperature_logger/ (the edges/ dir)
-    sibling = TEMPERATURE_LOG_FILE.parent.parent.parent.parent / "e3_beam_factor.hickle"
+    # 2. two levels above the raw data root (the edges/ dir)
+    sibling = RAW_DATA_ROOT.parent.parent / "e3_beam_factor.hickle"
     if sibling.exists():
         return sibling
     # 3. linux dev mounts
@@ -131,7 +116,6 @@ SAVED_DIR: Path = OUTPUT_ROOT / "saved"
 
 MANIFEST_FILE: Path = OUTPUT_ROOT / "manifest.json"
 LATEST_RUN_FILE: Path = OUTPUT_ROOT / "latest_run.json"
-AVAILABLE_DATES_FILE: Path = OUTPUT_ROOT / "available_dates.json"
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +124,6 @@ AVAILABLE_DATES_FILE: Path = OUTPUT_ROOT / "available_dates.json"
 SCRIPTS_DIR: Path = Path(__file__).resolve().parent
 
 RUN_SCRIPT: Path = SCRIPTS_DIR / "run_single_day.py"
-SCAN_SCRIPT: Path = SCRIPTS_DIR / "scan_dates.py"
 
 
 # ---------------------------------------------------------------------------
@@ -174,12 +157,21 @@ PYTHON: str = _detect_python()
 # whatever the probe says is what the EDGES receiver calibration sees,
 # which in turn is what ``calibrated_temps.txt`` reports back.
 #
-# Probe numbers are the ``offset_s`` values found in the on-site
-# temperature log file (see ``temperature_logger/*.log``). Override with
-# EDGES_PROBE_* if your hardware uses a different sensor layout.
+# Probe numbers are the codes of the on-site temperature log (catalog
+# ``hk_code``): 100 front_end_temperature, 101 amb_load_temperature,
+# 102 hot_load_temperature, 103 inner_box_temperature (degC); 106
+# thermal_control; 150 battery_voltage (V); 152 pr59_current; 0 the
+# thermal setpoint. Override with EDGES_PROBE_* if needed.
+#
+# OPEN QUESTION (to confirm with the team): the ambient-load calibration
+# uses code 100, which the catalog and edges-analysis call the *front end*
+# temperature; code 101 is the ambient load. Kept at 100 for now so results
+# are unchanged; see README "Open questions".
 PROBE_AMBIENT: float = float(os.environ.get("EDGES_PROBE_AMBIENT", "100"))
 PROBE_HOT: float = float(os.environ.get("EDGES_PROBE_HOT", "102"))
 PROBE_LNA: float = float(os.environ.get("EDGES_PROBE_LNA", "100"))
+# Code 152 is pr59_current (edges-analysis), NOT a temperature. The site
+# does not use it for any calibration; it is kept only for information.
 PROBE_COLD_LOAD: float = float(os.environ.get("EDGES_PROBE_COLD_LOAD", "152"))
 
 
@@ -222,8 +214,7 @@ def describe() -> str:
     return (
         f"REPO_ROOT          = {REPO_ROOT}\n"
         f"RAW_DATA_ROOT      = {RAW_DATA_ROOT}\n"
-        f"TEMPERATURE_LOG_DIR= {TEMPERATURE_LOG_DIR}\n"
-        f"TEMPERATURE_LOG    = {TEMPERATURE_LOG_FILE}\n"
+        f"PIPELINE_ROOT      = {os.environ.get('EDGES_PIPELINE_ROOT', '/data6/edges/edges-db')}\n"
         f"BEAM_FACTOR_FILE   = {BEAM_FACTOR_FILE}\n"
         f"OUTPUT_ROOT        = {OUTPUT_ROOT}\n"
         f"RUNS_DIR           = {RUNS_DIR}\n"
@@ -235,7 +226,7 @@ def describe() -> str:
         f"PROBE_AMBIENT      = {PROBE_AMBIENT}\n"
         f"PROBE_HOT          = {PROBE_HOT}\n"
         f"PROBE_LNA          = {PROBE_LNA}\n"
-        f"PROBE_COLD_LOAD    = {PROBE_COLD_LOAD}\n"
+        f"PROBE_COLD_LOAD    = {PROBE_COLD_LOAD} (pr59_current, not a temperature)\n"
     )
 
 
