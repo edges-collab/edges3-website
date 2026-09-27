@@ -24,8 +24,8 @@ export const BASE_URL: string =
 
 /**
  * Prepend the API base URL to a relative path. Paths are expected to
- * start with a leading slash (e.g. "/data/manifest.json",
- * "/data/runs/<id>/calibrated_temperature/foo.npz").
+ * start with a leading slash (e.g. "/api/night",
+ * "/data/calibration/<id>/plots.npz").
  */
 export function withBaseUrl(path: string): string {
   if (!path) return BASE_URL

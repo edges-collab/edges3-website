@@ -1,33 +1,35 @@
 import "./App.css"
 
-import { Route, Routes } from "react-router"
-import Select from "./pages/Select.tsx"
-import CalibrationData from "./pages/CalibrationData.tsx"
-import RawData from "./pages/RawData.tsx"
-import CalibratedData from "./pages/CalibratedData.tsx"
+import { Navigate, Route, Routes } from "react-router"
 import Home from "./pages/Home.tsx"
 import LastNight from "./pages/LastNight.tsx"
+import Calibrations from "./pages/Calibrations.tsx"
+import DataView from "./pages/DataView.tsx"
 
 import NavBar from "./components/NavBar.tsx"
-import { RunProvider } from "./state/RunContext.tsx"
+import { CalibrationProvider } from "./state/CalibrationContext.tsx"
 
 function App() {
   return (
-    <RunProvider>
+    <CalibrationProvider>
       <main className="app">
         <NavBar />
         <div className="page">
           <Routes>
             <Route path="/" element={<LastNight />} />
-            <Route path="/Status" element={<Home />} />
-            <Route path="/Select" element={<Select />} />
-            <Route path="/CalibrationData" element={<CalibrationData />} />
-            <Route path="/RawData" element={<RawData />} />
-            <Route path="/CalibratedData" element={<CalibratedData />} />
+            <Route path="/calibrations" element={<Calibrations />} />
+            <Route path="/data" element={<DataView />} />
+            <Route path="/status" element={<Home />} />
+            {/* old addresses */}
+            <Route path="/Select" element={<Navigate to="/calibrations" replace />} />
+            <Route path="/CalibrationData" element={<Navigate to="/calibrations" replace />} />
+            <Route path="/RawData" element={<Navigate to="/data" replace />} />
+            <Route path="/CalibratedData" element={<Navigate to="/data" replace />} />
+            <Route path="/Status" element={<Navigate to="/status" replace />} />
           </Routes>
         </div>
       </main>
-    </RunProvider>
+    </CalibrationProvider>
   )
 }
 

@@ -640,8 +640,9 @@ def run_calibration(inputs: Dict[str, Any], run_dir: Path, params: Dict[str, Any
     arrays["lt_cal_hot_load_delossed"] = _f32((ct["hot_load"] - (1 - gain) * ambient_k) / gain)
     arrays["lt_probe_hot_load"] = _f32(np.full(ct["freq"].size, hot_k))
 
-    # calibration spectra: mean Q per load, and waterfalls of Q relative to its
-    # time median (fractional deviations: small dynamic range, shows drifts)
+    # calibration spectra: mean Q per load, and waterfalls of the change over
+    # time as an equivalent temperature, T_NS (Q - median over time) [K]: a
+    # small dynamic range that shows drifts and RFI, also where Q ~ 0 (ambient)
     print("[run] Calibration spectra ...")
     wf: Dict[str, Any] = {}
     n_cycles: Dict[str, int] = {}
@@ -654,8 +655,8 @@ def run_calibration(inputs: Dict[str, Any], run_dir: Path, params: Dict[str, Any
         arrays[f"spec_q_{load}"] = _f32(np.nanmean(q, axis=0))
         sel, idx, centres = _bin_index(freqs)
         qb = _bin_rows(q, sel, idx, len(centres))
-        with np.errstate(invalid="ignore", divide="ignore"):
-            wf[f"{load}_dev"] = _f32(qb / np.nanmedian(qb, axis=0) - 1)
+        with np.errstate(invalid="ignore"):
+            wf[f"{load}_dev"] = _f32(T_NS * (qb - np.nanmedian(qb, axis=0)))
         wf["freq"] = centres
         wf[f"{load}_time_unix"] = np.asarray(gs.times[:, 0].unix)
         del gs, q

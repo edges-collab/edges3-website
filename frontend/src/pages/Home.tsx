@@ -1,58 +1,53 @@
+/**
+ * Status: whether the data packages work, and what the run queue is doing.
+ */
 import { useEffect, useState } from "react"
 import { Link } from "react-router"
 import { BASE_URL } from "../utils/baseURL"
-import { useRunState } from "../state/RunContext"
-import LatestRunBanner from "../components/LatestRunBanner"
 
-type PipelineStatus = {
-  raw_data_root_exists: boolean
-  lock: { busy: boolean; holder: string | null }
+type Status = {
+  data_packages: boolean
+  data_packages_error: string | null
+  queue: { running: string[]; queued: string[] }
+  runs: string[]
 }
 
 export default function Home() {
-  const { latest } = useRunState()
-  const [status, setStatus] = useState<PipelineStatus | null>(null)
+  const [status, setStatus] = useState<Status | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     fetch(`${BASE_URL}/pipeline/status`, { cache: "no-store" })
       .then((r) => r.json())
-      .then((d: PipelineStatus) => setStatus(d))
-      .catch(() => setStatus(null))
+      .then((d: Status) => setStatus(d))
+      .catch(() => setError("Status unavailable (is the backend running?)."))
   }, [])
 
   return (
     <div className="d-flex flex-column p-3 gap-3">
-      <LatestRunBanner pageTitle="Home" />
-
       <div className="border rounded p-3">
-        <h2>Welcome</h2>
-        <p>
-          Use <Link to="/Select">Select</Link> to pick dates and parameters, then click
-          <strong> Run with these dates</strong> to populate the plots on the
-          other pages. Browse the results in <Link to="/CalibrationData">Calibration</Link>,{" "}
-          <Link to="/RawData">Raw Data</Link>, and <Link to="/CalibratedData">Calibrated Data</Link>.
-        </p>
+        <h2>EDGES-3 site</h2>
+        <ul className="mb-0">
+          <li><Link to="/">Nightly Overview</Link>: the latest night at a glance, from precomputed quick-look and L1 products.</li>
+          <li><Link to="/calibrations">Calibrations</Link>: run and inspect a receiver calibration.</li>
+          <li><Link to="/data">Detailed Data View</Link>: one night calibrated with the selected calibration.</li>
+        </ul>
       </div>
-
       <div className="border rounded p-3">
-        <h2>Pipeline status</h2>
-        {status ? (
+        <h2 className="h4">Status</h2>
+        {error && <p className="text-muted">{error}</p>}
+        {status && (
           <>
-            <p>
-              Raw data root exists: <strong>{status.raw_data_root_exists ? "yes" : "no"}</strong>
+            <p className="mb-1">
+              Catalog and pipeline packages:{" "}
+              <strong>{status.data_packages ? "available" : `missing (${status.data_packages_error})`}</strong>
             </p>
-            <p>
-              Pipeline busy:{" "}
-              <strong>{status.lock.busy ? `yes (${status.lock.holder})` : "no"}</strong>
+            <p className="mb-1">
+              Running: <strong>{status.queue.running.join(", ") || "nothing"}</strong>; queued:{" "}
+              <strong>{status.queue.queued.length}</strong>
             </p>
+            <p className="text-muted small mb-0">{status.runs.join(" · ")}</p>
           </>
-        ) : (
-          <p className="text-muted">Pipeline status unavailable (is the backend running?).</p>
-        )}
-        {latest.run_id && (
-          <p className="text-muted small mt-2">
-            The website is currently showing data from your most recent run.
-          </p>
         )}
       </div>
     </div>

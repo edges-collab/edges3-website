@@ -1,58 +1,35 @@
 /*
 
-This is the navigation bar.
-It takes in no arguments
+This is the navigation bar: the Nightly Overview (home), Calibrations, the
+Detailed Data View and Status. The current tab is highlighted.
 
 */
 
-// Import the react router stuff
+import { NavLink } from "react-router"
 
-import { Link } from 'react-router'
-
-// Define the NavBar react object
+const TABS: [string, string][] = [
+  ["/", "Nightly Overview"],
+  ["/calibrations", "Calibrations"],
+  ["/data", "Detailed Data View"],
+  ["/status", "Status"],
+]
 
 function NavBar() {
   return (
-    <div className="d-flex gap-4 align-items-center p-2">
-
-        <div>
-            <Link to="/" className="text-decoration-none text-dark">
-            <h1 className='edges-logo'>EDGES</h1>  
-            </Link>
-        </div>  
-
-        <div className="d-flex gap-2">
-
-        <Link to="/" className="btn btn-primary nav-button">
-            Last night
-        </Link>
-
-        <Link to="/Select" className="btn btn-primary nav-button">
-            Select
-        </Link>
-
-        <Link to="/CalibrationData" className="btn btn-primary nav-button">
-            Calibration
-        </Link>
-
-        <Link to="/RawData" className="btn btn-primary nav-button">
-          Raw Data
-        </Link>
-
-        <Link to="/CalibratedData" className="btn btn-primary nav-button">
-           Calibrated Data
-        </Link>
-
-        <Link to="/Status" className="btn btn-primary nav-button">
-           Status
-        </Link>
-
-        </div>
-
+    <div className="d-flex gap-4 align-items-center p-2 border-bottom">
+      <NavLink to="/" className="text-decoration-none text-dark">
+        <h1 className="edges-logo m-0">EDGES</h1>
+      </NavLink>
+      <nav className="nav nav-pills gap-1">
+        {TABS.map(([to, label]) => (
+          <NavLink key={to} to={to} end={to === "/"}
+            className={({ isActive }) => `nav-link py-1 ${isActive ? "active" : ""}`}>
+            {label}
+          </NavLink>
+        ))}
+      </nav>
     </div>
   )
 }
-
-// Default export the object
 
 export default NavBar

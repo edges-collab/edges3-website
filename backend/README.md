@@ -7,12 +7,12 @@ FastAPI service + the EDGES-3 calibration/temperature pipeline.
 | File | Role |
 |---|---|
 | `config.py` | **All paths and tunable defaults live here.** Env-driven; see the top-level `README.md` for the full table. |
-| `backend_api.py` | FastAPI app — REST endpoints (`/manifest.json`, `/latest_run`, `/run_pipeline`, `/save_outputs`, `/download/...`) and a static-file mount at `/` serving `$EDGES_OUTPUT_ROOT`. |
-| `run_single_day.py` | The actual EDGES pipeline: receiver cal, S11 modelling, Dicke + linear frontend calibration, antenna temp, per-load actual temp matching. Writes the manifest + per-run npz/jpg trees. |
-| `products_api.py` | Read-only `/api/*` endpoints (`/api/night`, `/api/nights/latest`, `/api/quicklook`, `/api/l1`, `/api/housekeeping`, `/api/status`) over the catalog and pipeline products. Needs the optional `edges-catalog`/`edges-pipeline` packages. |
-| `tests/` | pytest tests of `products_api.py` on a synthetic catalog. |
-| `catalog_inputs.py` | Dates, input files, S11 sessions and probe temperatures for the calibration flow, from the EDGES catalog (nothing scans the raw data tree). |
-| `io_utils.py` | Shared dataclasses (`Plot`), deterministic run-hash, manifest writer. |
+| `backend_api.py` | FastAPI app: the routers below, `/health`, `/pipeline/status`, the `/data` static mount of `$EDGES_OUTPUT_ROOT` and the SPA fallback. |
+| `products_api.py` | Read-only `/api/night`, `/api/nights/latest`, `/api/quicklook`, `/api/l1`, `/api/housekeeping`, `/api/status` over the catalog and pipeline products (Nightly Overview). Needs the optional `edges-catalog`/`edges-pipeline` packages. |
+| `runs_api.py` | Calibration and observation runs of `run_single_day.py` as background jobs: `/api/calibrations/...`, `/api/observations/...`, `/api/runs/...`. |
+| `catalog_inputs.py` | Dates, nights, input files, S11 sessions and probe temperatures from the EDGES catalog (nothing scans the raw data tree). |
+| `run_single_day.py` | The EDGES pipeline in two stages: `--stage calibration` (receiver calibration) and `--stage observation` (a night calibrated with it). |
+| `tests/` | pytest tests on a synthetic catalog, and of the job runner with a fake stage script. |
 | `requirements.txt` | Every Python dep, installed via `uv pip install`. |
 
 ## Running locally
@@ -25,20 +25,18 @@ cd backend
 python -m uvicorn backend_api:app --host 127.0.0.1 --port 8003
 ```
 
-## Running the pipeline manually
+## Running a stage by hand
 
 ```bash
-python run_single_day.py \
-    --cal_date 2026_267 \
-    --spec_date 2026_268_12_15_02 \
-    --output_root /path/to/outputs --run_dir /path/to/outputs/runs/manual
+python run_single_day.py --stage calibration --cal_date 2026_267 --run_dir /path/to/cal
+python run_single_day.py --stage observation --night 2026-09-25 \
+    --calibration_dir /path/to/cal --run_dir /path/to/obs
 ```
 
-The inputs are resolved in the catalog (`--s11_date` defaults to the
-catalog's pick) and written to `<run_dir>/inputs.json`; `--inputs FILE`
-reuses such a file. The script prints the input issues and calibration
-temperatures, then the linear-frontend calibration. The manifest lands in
-`$EDGES_OUTPUT_ROOT/manifest.json`.
+The inputs are resolved in the catalog (sessions default to the
+recommended ones) and written to `<run_dir>/inputs.json`; `--inputs FILE`
+(and `--params FILE`) reuse such files. Results: `result.json`,
+`plots.npz`, `waterfalls.npz`.
 
 ## Path configuration cheat sheet
 

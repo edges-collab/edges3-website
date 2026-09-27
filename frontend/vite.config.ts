@@ -3,8 +3,8 @@ import babel from '@rolldown/plugin-babel'
 import { defineConfig } from 'vite'
 
 // Production: the FastAPI backend (uvicorn) serves the built `dist/`
-// itself under `/`, with `/data/*` for OUTPUT_ROOT (manifest, runs,
-// saved). So no Vite server is needed in the runtime — `npm run build`
+// itself under `/`, with `/data/*` for OUTPUT_ROOT (calibration and
+// observation runs). So no Vite server is needed in the runtime — `npm run build`
 // once, then uvicorn.
 //
 // This dev-server proxy below only matters if you want hot-reloading
@@ -22,14 +22,9 @@ export default defineConfig({
   server: {
     proxy: {
       '/api':             { target: `http://127.0.0.1:${BACKEND_PORT}`, changeOrigin: false },
-      '/health':           { target: `http://127.0.0.1:${BACKEND_PORT}`, changeOrigin: false },
-      '/latest_run':       { target: `http://127.0.0.1:${BACKEND_PORT}`, changeOrigin: false },
-      '/available_dates':  { target: `http://127.0.0.1:${BACKEND_PORT}`, changeOrigin: false },
-      '/run_pipeline':     { target: `http://127.0.0.1:${BACKEND_PORT}`, changeOrigin: false },
-      '/save_outputs':     { target: `http://127.0.0.1:${BACKEND_PORT}`, changeOrigin: false },
-      '/download':         { target: `http://127.0.0.1:${BACKEND_PORT}`, changeOrigin: false },
-      '/pipeline':         { target: `http://127.0.0.1:${BACKEND_PORT}`, changeOrigin: false },
-      '/data':             { target: `http://127.0.0.1:${BACKEND_PORT}`, changeOrigin: false },
+      '/health':          { target: `http://127.0.0.1:${BACKEND_PORT}`, changeOrigin: false },
+      '/pipeline':        { target: `http://127.0.0.1:${BACKEND_PORT}`, changeOrigin: false },
+      '/data':            { target: `http://127.0.0.1:${BACKEND_PORT}`, changeOrigin: false },
     },
   },
 })

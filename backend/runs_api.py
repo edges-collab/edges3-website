@@ -71,6 +71,12 @@ KINDS = ("calibration", "observation")
 MAX_RUNS_PER_KIND = 20
 RUN_TIMEOUT_S = 1800
 _ID = re.compile(r"^[0-9a-f]{16}$")
+#: The pipeline code is part of every run's key, so a code change never
+#: reuses outputs of the old code.
+try:
+    CODE_VERSION = hashlib.sha256(config.RUN_SCRIPT.read_bytes()).hexdigest()[:12]
+except OSError:
+    CODE_VERSION = "unknown"
 
 #: Parameters of each stage: default and allowed range (must match
 #: run_single_day.DEFAULT_PARAMS, which is not imported to keep this light).
@@ -158,6 +164,7 @@ def _digest(obj: Any) -> str:
 def run_id(kind: str, inputs: Dict[str, Any], params: Dict[str, Any], calibration_id: Optional[str] = None) -> str:
     """The run's key: what it computes from, including the input files' versions."""
     return _digest({
+        "code": CODE_VERSION,
         "kind": kind,
         "dates": inputs["dates"],
         "params": params,

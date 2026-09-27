@@ -68,3 +68,26 @@ body {
   justify-content: center;
   align-items: center;
 }
+/* Option panel on the left of the Calibrations / Detailed Data View tabs;
+   stays in view while the plots scroll. Stacks above the plots on narrow
+   screens. */
+.side-panel {
+  flex: 0 0 320px;
+  width: 320px;
+  position: sticky;
+  top: 0.5rem;
+  max-height: calc(100vh - 6rem);
+  overflow-y: auto;
+}
+
+@media (max-width: 900px) {
+  .page > .d-flex.align-items-start {
+    flex-direction: column;
+  }
+  .side-panel {
+    position: static;
+    width: 100%;
+    flex-basis: auto;
+    max-height: none;
+  }
+}

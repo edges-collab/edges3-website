@@ -395,12 +395,11 @@ def resolve_observation(cat: Any, night: str = LATEST, ant_s11: str = LATEST) ->
 
     ant_files = []
     for r in sp.itertuples():
-        f_issues: List[str] = []
+        # the ambient probe at each file (for information; the calibration of
+        # the antenna needs no probe temperature, see run_single_day.T_LOAD)
         temps = _temperatures(cat, [
-            ("lna", r.path, "ant", config.PROBE_LNA, config.TCAB_FALLBACK_K),
             ("obs_ambient", r.path, "ant", config.PROBE_AMBIENT, config.TCOLD_FALLBACK_K),
-        ], f_issues)
-        issues += [i for i in f_issues if i.startswith("no lna")]
+        ], [])
         ant_files.append({
             "path": r.path,
             "name": os.path.basename(r.path),

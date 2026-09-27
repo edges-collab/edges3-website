@@ -11,14 +11,13 @@ Environment variables (all optional):
                              supplies it). Default: /data5/edges/data/EDGES3_data/MRO
   EDGES_PIPELINE_ROOT       Catalog + pipeline products (read only), used by
                              edges-catalog / edges-pipeline. Default: /data6/edges/edges-db
-  EDGES_OUTPUT_ROOT         Where outputs and the manifest live.
+  EDGES_OUTPUT_ROOT         Where calibration and observation runs are written.
                              Default: <repo>/outputs
   EDGES_BEAM_FACTOR_FILE    Path to the EDGES-3 antenna beam factor file
                              (``e3_beam_factor.hickle``). Required for the
                              absolute temperature calibration.
   EDGES_PROBE_AMBIENT       Temperature-log code for ambient cal (default 100)
   EDGES_PROBE_HOT           Temperature-log code for hot cal     (default 102)
-  EDGES_PROBE_LNA           Temperature-log code for LNA / cable (default 100)
   EDGES_PROBE_COLD_LOAD     Code 152 = pr59_current, NOT a temperature
                              (informational only; default 152)
 
@@ -163,7 +162,6 @@ PYTHON: str = _detect_python()
 # are unchanged; see README "Open questions".
 PROBE_AMBIENT: float = float(os.environ.get("EDGES_PROBE_AMBIENT", "100"))
 PROBE_HOT: float = float(os.environ.get("EDGES_PROBE_HOT", "102"))
-PROBE_LNA: float = float(os.environ.get("EDGES_PROBE_LNA", "100"))
 # Code 152 is pr59_current (edges-analysis), NOT a temperature. The site
 # does not use it for any calibration; it is kept only for information.
 PROBE_COLD_LOAD: float = float(os.environ.get("EDGES_PROBE_COLD_LOAD", "152"))
@@ -217,7 +215,6 @@ def describe() -> str:
         f"TCAB_FALLBACK_K    = {TCAB_FALLBACK_K} K\n"
         f"PROBE_AMBIENT      = {PROBE_AMBIENT}\n"
         f"PROBE_HOT          = {PROBE_HOT}\n"
-        f"PROBE_LNA          = {PROBE_LNA}\n"
         f"PROBE_COLD_LOAD    = {PROBE_COLD_LOAD} (pr59_current, not a temperature)\n"
     )
 

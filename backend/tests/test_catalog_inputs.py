@@ -97,11 +97,13 @@ def test_resolve_observation(cat):
     assert {"ant", "O", "S", "L"} <= set(inp["files"]["ant_s11"])
     by_name = {f["name"]: f for f in inp["files"]["ant"]}
     a = by_name[T_A.strftime("2025_100_%H_%M_%S_ant.acq")]["temperatures"]
-    assert a["lna"]["source"] == "templog" and a["lna"]["temperature_c"] == pytest.approx(25.0)
-    # the 12:00 file has no log reading within 15 min: fallback + issue
+    assert a["obs_ambient"]["source"] == "templog"
+    assert a["obs_ambient"]["temperature_c"] == pytest.approx(25.0)
+    # the 12:00 file has no log reading within 15 min: shown as missing, no issue
+    # (the antenna calibration needs no probe temperature)
     b = by_name[T_B.strftime("2025_100_%H_%M_%S_ant.acq")]["temperatures"]
-    assert b["lna"]["source"] == "default"
-    assert any(i.startswith("no lna temperature") for i in inp["issues"])
+    assert b["obs_ambient"]["source"] == "default"
+    assert inp["issues"] == []
 
 
 def test_resolve_observation_errors(cat):
