@@ -115,6 +115,33 @@ def test_resolve_observation_errors(cat):
     assert any("chosen; the nearest before the night" in i for i in inp["issues"])
 
 
+def test_file_being_written_is_left_out(cat):
+    import time
+
+    inp = catalog_inputs.resolve_observation(cat)
+    path = next(f["path"] for f in inp["files"]["ant"] if f["name"] == T_C.strftime("2025_100_%H_%M_%S_ant.acq"))
+    st = os.stat(path)
+    os.utime(path, (time.time(), time.time()))  # (synthetic file)
+    try:
+        again = catalog_inputs.resolve_observation(cat)
+        assert path not in [f["path"] for f in again["files"]["ant"]]
+        assert any("still being written" in i for i in again["issues"])
+    finally:
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+
+
+def test_bin_rows_empty_bins():
+    import numpy as np
+
+    rsd = pytest.importorskip("run_single_day")
+    f = np.array([40.1, 40.2, 41.1, 41.2])  # nothing in 40.25-41.0 or 41.25-200
+    sel, idx, centres = rsd._bin_index(f)
+    x = np.array([[1.0, 3.0, 5.0, np.nan]])
+    out = rsd._bin_rows(x, sel, idx, len(centres))
+    assert out[0, 0] == 2.0 and out[0, 4] == 5.0
+    assert np.isnan(out[0, 1:4]).all() and np.isnan(out[0, 5:]).all()
+
+
 def test_file_versions_see_changes(cat):
     inp = catalog_inputs.resolve_calibration(cat)
     path = inp["files"]["amb"]

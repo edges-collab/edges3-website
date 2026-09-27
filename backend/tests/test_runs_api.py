@@ -140,6 +140,10 @@ def test_unknown_runs(client):
 def test_eviction(client, monkeypatch):
     c, _ = client
     monkeypatch.setattr(runs_api, "MAX_RUNS_PER_KIND", 2)
+    monkeypatch.setattr(runs_api, "_NEW_DIR_GRACE_S", 0)
+    # a run being created (no status yet) is never evicted
+    half = config.OUTPUT_ROOT / "calibration" / "0123456789abcdef"
+    half.mkdir(parents=True)
     ids = []
     for n in (11, 12, 13):
         rid = c.post("/api/calibrations", json={"params": {"cterms": n}}).json()["id"]
@@ -148,6 +152,7 @@ def test_eviction(client, monkeypatch):
         time.sleep(0.05)
     kept = sorted(p.name for p in (config.OUTPUT_ROOT / "calibration").iterdir())
     assert ids[0] not in kept and set(ids[1:]) <= set(kept)
+    assert half.name in kept
 
 
 def test_interrupted_run_reads_as_failed(client):
@@ -158,3 +163,8 @@ def test_interrupted_run_reads_as_failed(client):
     (d / "status.json").write_text(json.dumps({"state": "running"}))
     st = c.get(f"/api/calibrations/{r['id']}").json()["status"]
     assert st["state"] == "failed" and "interrupted" in st["error"]
+    # owned by another live server process (here: this test's parent): kept
+    import os
+
+    (d / "status.json").write_text(json.dumps({"state": "running", "pid": os.getppid()}))
+    assert c.get(f"/api/calibrations/{r['id']}").json()["status"]["state"] == "running"

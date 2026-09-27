@@ -64,8 +64,10 @@ export default function CalibrationPlots({ detail }: Props) {
     const cal = arr(data, k === "hot_load" ? "lt_cal_hot_load_delossed" : `lt_cal_${k}`)
     const known = arr(data, k === "hot_load" ? "lt_probe_hot_load" : `lt_known_${k}`)
     const title = k === "hot_load"
-      ? `${label} (cable loss removed, G = ${res.hot_load_gain.map((g) => g.toFixed(4)).join("–")}) vs probe`
-      : `${label} vs known (ambient probe)`
+      ? `${label} (cable loss removed, G = ${res.hot_load_gain.map((g) => g.toFixed(4)).join("–")}) vs probe — fit residual, not an independent check`
+      : k === "ambient"
+        ? `${label} vs known (ambient probe) — fit residual, not an independent check`
+        : `${label} vs known (ambient probe at the ambient spectrum)`
     if (tempMode === "residuals") {
       const d = cal.map((v, i) => v - known[i])
       return { title: `${title}: calibrated − known`, yTitle: "K", traces: [{ x: lf, y: d, name: "calibrated − known" }],

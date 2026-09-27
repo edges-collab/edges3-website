@@ -71,12 +71,26 @@ KINDS = ("calibration", "observation")
 MAX_RUNS_PER_KIND = 20
 RUN_TIMEOUT_S = 1800
 _ID = re.compile(r"^[0-9a-f]{16}$")
-#: The pipeline code is part of every run's key, so a code change never
-#: reuses outputs of the old code.
-try:
-    CODE_VERSION = hashlib.sha256(config.RUN_SCRIPT.read_bytes()).hexdigest()[:12]
-except OSError:
-    CODE_VERSION = "unknown"
+#: Never reuse a run whose inputs are younger than this (a file still being
+#: written makes the key change between requests).
+_NEW_DIR_GRACE_S = 120
+_start_lock = threading.Lock()  # one start/retry at a time (FastAPI's threadpool)
+
+
+def code_version() -> str:
+    """The pipeline code and edges-analysis version: part of every run's key, so
+    a code change never reuses outputs of the old code."""
+    try:
+        from importlib.metadata import version
+
+        edges = version("edges-analysis")
+    except Exception:
+        edges = "?"
+    try:
+        script = hashlib.sha256(Path(config.RUN_SCRIPT).read_bytes()).hexdigest()[:12]
+    except OSError:
+        script = "unknown"
+    return f"{script}+edges-{edges}"
 
 #: Parameters of each stage: default and allowed range (must match
 #: run_single_day.DEFAULT_PARAMS, which is not imported to keep this light).
@@ -164,7 +178,7 @@ def _digest(obj: Any) -> str:
 def run_id(kind: str, inputs: Dict[str, Any], params: Dict[str, Any], calibration_id: Optional[str] = None) -> str:
     """The run's key: what it computes from, including the input files' versions."""
     return _digest({
-        "code": CODE_VERSION,
+        "code": code_version(),
         "kind": kind,
         "dates": inputs["dates"],
         "params": params,
@@ -223,7 +237,10 @@ class _Queue:
             finally:
                 with self.cond:
                     self.active.pop((kind, rid), None)
-                _evict(kind)
+                try:
+                    _evict(kind)
+                except Exception:  # never kill the worker
+                    log.exception("eviction failed")
 
     def snapshot(self) -> Dict[str, Any]:
         with self.lock:
@@ -243,19 +260,38 @@ queue = _Queue()
 def _set_status(kind: str, rid: str, state: str, **extra: Any) -> None:
     path = _run_dir(kind, rid) / "status.json"
     status = _read(path, {}) or {}
-    status.update(state=state, updated_utc=_now(), **extra)
+    status.update(state=state, updated_utc=_now(), pid=os.getpid(), **extra)
     status.setdefault(f"{state}_utc", _now())
     _write(path, status)
 
 
+def _alive(pid: Any) -> bool:
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _orphaned(status: Dict[str, Any], kind: str, rid: str) -> bool:
+    """A queued/running run that no live server process owns."""
+    if status.get("state") not in ("queued", "running"):
+        return False
+    if queue.is_active(kind, rid):
+        return False
+    pid = status.get("pid")
+    return pid == os.getpid() or not _alive(pid)
+
+
 def status_of(kind: str, rid: str) -> Optional[Dict[str, Any]]:
     """The run's status, or None if there is no such run. A run left queued or
-    running by a previous server process reads as ``failed`` (interrupted)."""
+    running by a server process that has gone reads as ``failed`` (interrupted);
+    one owned by another live server process keeps its state."""
     d = _root(kind) / rid
     status = _read(d / "status.json")
     if status is None:
         return None
-    if status.get("state") in ("queued", "running") and not queue.is_active(kind, rid):
+    if _orphaned(status, kind, rid):
         status = {**status, "state": "failed", "error": "interrupted (server restarted)"}
     return status
 
@@ -274,11 +310,11 @@ def _execute(kind: str, rid: str) -> None:
     _set_status(kind, rid, "running")
     env = {**os.environ, "OMP_NUM_THREADS": "2", "MKL_NUM_THREADS": "2",
            "OPENBLAS_NUM_THREADS": "2", "PYTHONUNBUFFERED": "1"}
+    nice = [shutil.which("nice") or "nice", "-n", "10"] if shutil.which("nice") else []
     with open(d / "log.txt", "w") as logf:
         try:
             proc = subprocess.run(
-                cmd, stdout=logf, stderr=subprocess.STDOUT, env=env, timeout=RUN_TIMEOUT_S,
-                preexec_fn=lambda: os.nice(10),
+                nice + cmd, stdout=logf, stderr=subprocess.STDOUT, env=env, timeout=RUN_TIMEOUT_S,
             )
         except subprocess.TimeoutExpired:
             _set_status(kind, rid, "failed", error=f"timed out after {RUN_TIMEOUT_S} s")
@@ -300,24 +336,41 @@ def _tail(d: Path, n: int = 40) -> str:
 
 
 def _evict(kind: str) -> None:
-    """Keep the newest MAX_RUNS_PER_KIND runs (never active ones or their calibrations)."""
+    """Keep the newest MAX_RUNS_PER_KIND finished runs of ``kind``.
+
+    Never removes a run that is queued or running (in any live process), one
+    being created (no status yet, or very new), or a calibration that such an
+    observation depends on.
+    """
     root = _root(kind)
     if not root.is_dir():
         return
-    keep = set()
-    with queue.lock:
-        for (k, i) in queue.active:
-            if k == kind:
-                keep.add(i)
-            elif kind == "calibration" and k == "observation":
-                cal = (_read(_root(k) / i / "request.json", {}) or {}).get("calibration_id")
-                keep.add(cal)
-    runs = sorted(
-        (p for p in root.iterdir() if p.is_dir() and _ID.match(p.name)),
-        key=lambda p: (p / "status.json").stat().st_mtime if (p / "status.json").exists() else 0,
-        reverse=True,
-    )
-    for p in runs[MAX_RUNS_PER_KIND:]:
+    now = datetime.now().timestamp()
+    keep, finished = set(), []
+    for p in root.iterdir():
+        if not (p.is_dir() and _ID.match(p.name)):
+            continue
+        st_path = p / "status.json"
+        try:
+            mtime = st_path.stat().st_mtime
+        except OSError:
+            keep.add(p.name)  # being created
+            continue
+        status = _read(st_path, {}) or {}
+        if now - mtime < _NEW_DIR_GRACE_S or (
+            status.get("state") in ("queued", "running") and not _orphaned(status, kind, p.name)
+        ):
+            keep.add(p.name)
+        else:
+            finished.append((mtime, p))
+    if kind == "calibration":
+        obs_root = _root("observation")
+        for p in (obs_root.iterdir() if obs_root.is_dir() else []):
+            status = _read(p / "status.json", {}) or {}
+            if status.get("state") in ("queued", "running"):
+                keep.add((_read(p / "request.json", {}) or {}).get("calibration_id"))
+    finished.sort(reverse=True)
+    for _, p in finished[MAX_RUNS_PER_KIND:]:
         if p.name not in keep:
             shutil.rmtree(p, ignore_errors=True)
 
@@ -368,13 +421,14 @@ def resolve_observation(req: ObservationRequest) -> Dict[str, Any]:
 
 def _start(kind: str, resolved: Dict[str, Any], request: Dict[str, Any]) -> None:
     rid = resolved["id"]
-    st = status_of(kind, rid)
-    if st and st["state"] in ("done", "queued", "running"):
-        return
-    if st:  # failed or interrupted: retry from scratch
-        shutil.rmtree(_run_dir(kind, rid), ignore_errors=True)
-    _prepare(kind, rid, resolved["inputs"], resolved["params"], request)
-    queue.submit(kind, rid)
+    with _start_lock:  # check, clean, prepare and submit as one step
+        st = status_of(kind, rid)
+        if st and st["state"] in ("done", "queued", "running"):
+            return
+        if st:  # failed or interrupted: retry from scratch
+            shutil.rmtree(_run_dir(kind, rid), ignore_errors=True)
+        _prepare(kind, rid, resolved["inputs"], resolved["params"], request)
+        queue.submit(kind, rid)
 
 
 def _describe(kind: str, rid: str) -> Dict[str, Any]:
@@ -438,8 +492,9 @@ def observation_resolve(req: ObservationRequest) -> Dict[str, Any]:
 def observation_start(req: ObservationRequest) -> Dict[str, Any]:
     r = resolve_observation(req)
     cal = r["calibration"]
-    _start("calibration", cal, {"cal": req.calibration.cal, "s11": req.calibration.s11,
-                                "params": cal["params"]})
+    if (r["status"] or {}).get("state") != "done":  # a finished night needs nothing
+        _start("calibration", cal, {"cal": req.calibration.cal, "s11": req.calibration.s11,
+                                    "params": cal["params"]})
     _start("observation", r, {"night": req.night, "ant_s11": req.ant_s11,
                               "params": r["params"], "calibration_id": cal["id"]})
     return {**_describe("observation", r["id"]), "calibration_id": cal["id"]}

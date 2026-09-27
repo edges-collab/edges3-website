@@ -544,14 +544,19 @@ def _bin_index(freqs_mhz: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarra
 
 
 def _bin_rows(x: np.ndarray, sel: np.ndarray, idx: np.ndarray, nbins: int) -> np.ndarray:
-    """NaN-aware mean of each row of ``x`` over frequency bins."""
+    """NaN-aware mean of each row of ``x`` over frequency bins (NaN for empty bins)."""
     v = x[:, sel]
     ok = np.isfinite(v)
-    starts = np.searchsorted(idx, np.arange(nbins))  # channels are sorted by bin
+    out = np.full((x.shape[0], nbins), np.nan)
+    present = np.unique(idx)  # bins with channels; channels are sorted by bin
+    if len(present) == 0:
+        return out
+    starts = np.searchsorted(idx, present)
     total = np.add.reduceat(np.where(ok, v, 0.0), starts, axis=1)
     count = np.add.reduceat(ok, starts, axis=1)
     with np.errstate(invalid="ignore", divide="ignore"):
-        return total / count
+        out[:, present] = total / count
+    return out
 
 
 class _Mean:
@@ -728,6 +733,8 @@ def run_observation(
                 root, ant_s11, target_freqs=gs.freqs, f_low=f_lo, f_high=f_hi, n_terms=n_terms
             )
             sel, idx, centres = _bin_index(freqs_mhz)
+            cal_f = calobs.freqs.to_value("MHz")
+            cal_band = (freqs_mhz >= cal_f.min()) & (freqs_mhz <= cal_f.max())
         p0, p1, p2 = (np.asarray(gs.data[k, 0])[keep] for k in range(3))
         q = _q(p0, p1, p2)
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -736,6 +743,9 @@ def run_observation(
         tcal = np.asarray(calobs.calibrate_approximate_temperature(
             tuncal, t_load=T_LOAD, t_load_ns=T_NS, ant_s11=ant_model.s11, freqs=gs.freqs,
         ))
+        # edges interpolates the calibration with extrapolating splines: keep
+        # only the calibrated band
+        tcal[:, ~cal_band] = np.nan
         for k, v in (("pant", p0), ("pload", p1), ("plns", p2), ("q", q), ("r", r),
                      ("tuncal", tuncal), ("tcal", tcal)):
             means[k].add(v)
@@ -748,7 +758,6 @@ def run_observation(
         raise RuntimeError("no antenna cycles inside the night")
 
     # linear coefficients T_cal = a Q + b on the calibration grid
-    cal_f = calobs.freqs.to_value("MHz")
     a, b = calobs.get_linear_coefficients(ant_s11=_on_grid(ant_model, cal_f), freqs=calobs.freqs)
 
     arrays = {
@@ -777,6 +786,7 @@ def run_observation(
                         "params": cal_result["params"]},
         "params": params,
         "ant_s11_window_mhz": [f_lo, f_hi],
+        "calibration_band_mhz": [float(cal_f.min()), float(cal_f.max())],
         "t_load": T_LOAD,
         "t_load_ns": T_NS,
         "files": per_file,

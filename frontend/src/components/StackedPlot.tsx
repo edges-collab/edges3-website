@@ -61,7 +61,9 @@ export default function StackedPlot({
   const named = new Set<string>() // one legend entry per series name
   for (let c = 0; c < cols; c++) {
     const xa = c === 0 ? "xaxis" : "xaxis2"
-    const bottom = Math.min(panels.length - 1, (nRows - 1) * cols + c)
+    // the lowest panel of this column carries its tick labels
+    let bottom = c
+    for (let i = c; i < panels.length; i += cols) bottom = i
     L[xa] = {
       domain: c === 0 ? [0, colW] : [1 - colW, 1],
       anchor: `y${bottom === 0 ? "" : bottom + 1}`,

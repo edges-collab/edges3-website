@@ -44,6 +44,9 @@ TEMPLOG_TOLERANCE_S = 15 * 60
 LATEST = "Latest"
 #: Warn if the antenna S11 session is further than this from the night.
 ANT_S11_WARN_DAYS = 7
+#: Antenna files modified more recently than this may still be being written
+#: (FASTSPEC appends cycles): they are left out of a night, with an issue.
+SETTLE_S = 10 * 60
 
 
 class InputError(ValueError):
@@ -394,7 +397,15 @@ def resolve_observation(cat: Any, night: str = LATEST, ant_s11: str = LATEST) ->
         )
 
     ant_files = []
+    now = datetime.now(timezone.utc).timestamp()
     for r in sp.itertuples():
+        try:
+            fresh = now - os.stat(r.path).st_mtime < SETTLE_S
+        except OSError:
+            fresh = False
+        if fresh:
+            issues.append(f"{os.path.basename(r.path)} is still being written: left out")
+            continue
         # the ambient probe at each file (for information; the calibration of
         # the antenna needs no probe temperature, see run_single_day.T_LOAD)
         temps = _temperatures(cat, [
@@ -408,6 +419,8 @@ def resolve_observation(cat: Any, night: str = LATEST, ant_s11: str = LATEST) ->
             "n_cycles": _nan_to_none(r.n_cycles),
             "temperatures": temps,
         })
+    if not ant_files:
+        raise InputError(f"No finished antenna spectra in the night of {night} yet")
     return {
         "kind": "observation",
         "night": {"date": night, "start_unix": start, "end_unix": end},
