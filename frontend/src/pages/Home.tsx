@@ -29,7 +29,7 @@ export default function Home() {
         <h2>EDGES-3 site</h2>
         <ul className="mb-0">
           <li><Link to="/">Nightly Overview</Link>: the latest night at a glance, from precomputed quick-look and L1 products.</li>
-          <li><Link to="/calibrations">Calibrations</Link>: run and inspect a receiver calibration.</li>
+          <li><Link to="/calibrations">Calibrations</Link>: a day's receiver calibration, stored by the pipeline (or computed with other settings).</li>
           <li><Link to="/data">Detailed Data View</Link>: one night calibrated with the selected calibration.</li>
         </ul>
       </div>

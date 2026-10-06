@@ -10,7 +10,8 @@ The night of 2025-04-10 at the MRO (18:00-06:00 AWST = 10:00-22:00 UTC) has:
 - ``B`` 12:00 UTC, 40 cycles (a ~1 h gap after ``A``), cycle 7 an antenna
   dropout (p0 below p1, so Q < 0);
 - ``C`` 13:00 UTC, 10 cycles (a short file);
-- ``bad`` 14:00 UTC, NUL-padded (read_acq cannot decode it: no products);
+- ``bad`` 14:00 UTC, catalogued, then its first entry garbled in place
+  (read_acq cannot decode it: no products);
 - ``day`` 2025-04-11 05:00 UTC (13:00 AWST), 5 cycles: daytime data after
   the night, so ``Products.latest_night`` points at the (empty) next night;
 - a temperature log every 5 min over 10:00-11:00 and 12:30-13:30 UTC.
@@ -111,6 +112,18 @@ def write_acq(
     return path
 
 
+def garble_first_entry(path: Path) -> None:
+    """Garble the time of the first data line, in place, so read_acq cannot read it
+    (as edges-pipeline tests/test_l1.py does: read_acq >= 1.3 reads the complete
+    cycles of a NUL-padded file). Size, mtime and inode are kept."""
+    src = bytearray(path.read_bytes())
+    dl = src.index(b"\n", src.index(b"# swpos 0")) + 1  # the first data line
+    src[dl : dl + 4] = b"XXXX"
+    st = path.stat()
+    path.write_bytes(src)
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+
+
 def templog_block(t: datetime, hot: float = 111.0) -> str:
     stamp = f"{t.year}_{t.timetuple().tm_yday:03d}_{t.hour:02d}"
     date = t.strftime("%a %b %d %H:%M:%S UTC %Y")
@@ -120,8 +133,12 @@ def templog_block(t: datetime, hot: float = 111.0) -> str:
     )
 
 
-def rcal_arrays(offset: float = 0.0) -> dict:
-    """A trivial rcal v2 solution, T = 1000 Q + 300, with all four loads."""
+def rcal_arrays(offset: float = 0.0, alan_mode: bool = False) -> dict:
+    """A trivial rcal v2 solution, T = 1000 Q + 300, with all four loads.
+
+    ``alan_mode``: laid out as the stored rcal version 1 products are (no load
+    S11s; the hot-load loss as a (frequency, loss) table).
+    """
     f = np.arange(40.0, 190.01, 0.5)
     zero = np.zeros_like(f)
     out = {
@@ -137,8 +154,11 @@ def rcal_arrays(offset: float = 0.0) -> dict:
                                    ("open", 300.0), ("short", 300.0))):
         out[f"calibrated_{name}"] = np.full_like(f, t + 0.1 * i + offset)
         out[f"known_{name}"] = np.full_like(f, t)
-        out[f"s11_{name}_real"] = np.full_like(f, 0.1 * i)
-        out[f"s11_{name}_imag"] = np.full_like(f, -0.05)
+        if not alan_mode:
+            out[f"s11_{name}_real"] = np.full_like(f, 0.1 * i)
+            out[f"s11_{name}_imag"] = np.full_like(f, -0.05)
+    if alan_mode:
+        out["hot_load_loss"] = np.stack([f, np.full_like(f, 0.98)], axis=1)
     return out
 
 
@@ -201,15 +221,11 @@ def build_env(tmp: Path):
     from edges_pipeline.runner import run_l1, run_ql
 
     root = tmp / "MRO"
-    good = write_acq(root, T_A, 40, clip_cycle=5)
+    write_acq(root, T_A, 40, clip_cycle=5)
     write_acq(root, T_B, 40, seed=1, dropout_cycle=7)
     write_acq(root, T_C, 10, seed=2)
     write_acq(root, T_DAY, 5, seed=3)
-    src = good.read_bytes()
-    cut = src.index(b"# swpos 0", src.index(b"# swpos 2"))
-    bad = root / "mro/ant/2025" / _acq_name(T_BAD)
-    bad.write_bytes(src[:cut] + b"\x00" * 3000)
-    _age(bad)
+    bad = write_acq(root, T_BAD, 10, seed=4)
 
     tl = root / "temperature_logger"
     tl.mkdir(parents=True)
@@ -239,13 +255,14 @@ def build_env(tmp: Path):
         "roots": [{"path": str(root), "deployment": "edges3-mro", "layout": "edges3-field-mirror"}],
     })
     ingest(cfg, max_mbps=None)
+    garble_first_entry(bad)
     settings = Settings(out / "catalog.sqlite", out / "products.sqlite", out / "prod")
     ql_cfg = tmp / "ql_all.toml"  # the default QL config covers only the last 30 days
     ql_cfg.write_text('stage = "ql"\nname = "all"\n[select]\nloads = ["ant"]\n')
     run_ql(settings, ql_cfg, workers=1, max_mbps=None)
     run_l1(settings, workers=1, max_mbps=None)
     fake_rcal(settings, CAL_DATE)  # the default configuration
-    fake_rcal(settings, CAL_DATE, ALT_PARAMS, rcal_arrays(offset=0.5))
+    fake_rcal(settings, CAL_DATE, ALT_PARAMS, rcal_arrays(offset=0.5, alan_mode=True))
     return settings
 
 

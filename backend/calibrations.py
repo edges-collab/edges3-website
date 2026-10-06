@@ -245,6 +245,18 @@ def _plain(x: Any) -> Any:
     return _scalar(x)
 
 
+def _loss(info: Dict[str, Any]) -> Optional[np.ndarray]:
+    """The hot-load loss on ``freq_mhz``. rcal version 1 (Alan mode) products
+    hold it as a ``(n, 2)`` table of (frequency, loss)."""
+    loss = info.get("hot_load_loss")
+    if loss is None:
+        return None
+    loss = np.asarray(loss, dtype=np.float64)
+    if loss.ndim == 2 and loss.shape[1] == 2:
+        return np.interp(np.asarray(info["freq_mhz"], dtype=np.float64), loss[:, 0], loss[:, 1])
+    return loss if loss.ndim == 1 else None
+
+
 def calibration_json(cal: Any, info: Dict[str, Any], source: str) -> Dict[str, Any]:
     """Everything the page plots, at the product's resolution (3072 channels).
 
@@ -286,7 +298,7 @@ def calibration_json(cal: Any, info: Dict[str, Any], source: str) -> Dict[str, A
         "config": _plain(info.get("config") or {}),
         "freq_mhz": _arr(info.get("freq_mhz"), 6),
         "loads": {n: load(n) for n in LOADS},
-        "hot_load_loss": _arr(info.get("hot_load_loss"), 7),
+        "hot_load_loss": _arr(_loss(info), 7),
         "nw": {
             "freq_mhz": _arr(cal.freqs.to_value("MHz"), 6),
             **{k: _arr(getattr(cal, k), 4) for k in ("Tsca", "Toff", "Tunc", "Tcos", "Tsin")},

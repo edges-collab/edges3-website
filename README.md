@@ -46,7 +46,7 @@ packages.
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Create the venv and install deps:
-uv venv .venv --python 3.11
+uv venv .venv --python 3.13   # edges-analysis 8.4 (the pipeline's) needs >= 3.12
 source .venv/bin/activate
 uv pip install -r backend/requirements.txt
 ```
@@ -62,8 +62,10 @@ python backend/config.py    # prints every resolved path + probe number
 The site finds data through the EDGES **catalog** and the pipeline's
 precomputed products, never by scanning the raw data tree: the **Last
 night** page (the home page, `/`) reads quick-look (QL) and L1 QA
-products, and the **Calibrations** and **Detailed Data View** tabs take their dates, input files
-and probe temperatures from the catalog. Both use two packages that are
+products, the **Calibrations** tab shows the pipeline's receiver
+calibrations (stored, or computed with its code for other settings), and
+the **Detailed Data View** takes its nights and input files from the
+catalog. They use two packages that are
 **not published yet**:
 `edges-catalog` and `edges-pipeline`. They are local git repositories
 on the EDGES server (ask the data maintainers for their location);
@@ -72,8 +74,12 @@ install them pinned to their committed code (not editable):
 ```bash
 uv pip install \
   "edges-catalog @ git+file:///path/to/edges-catalog" \
-  "edges-pipeline @ git+file:///path/to/edges-pipeline"
+  "edges-pipeline[cal] @ git+file:///path/to/edges-pipeline"
 ```
+
+The `cal` extra pins the `edges-analysis` version the pipeline's receiver
+calibration is written for (computing a calibration with other settings
+fails without it).
 
 Without them the Last night page, the date lists and the calibration
 flow return 503 with an install hint. The products and the catalog live under
@@ -207,19 +213,26 @@ Four tabs:
   the date picker choose other nights (`/?date=YYYY-MM-DD`, named by the
   local date of the evening). The badge thresholds are provisional (see
   `QA_THRESHOLDS` in `backend/products_api.py`).
-* **Calibrations** (`/calibrations`): choose a calibration day, the S11
-  session (default: the one the catalog recommends for the day) and the fit
-  parameters on the left; the inputs, temperatures and any issues show
-  there. Click **Run** (~1 min); the plots load on the right: the S11s of
-  the four loads and the receiver (|S11|/phase or Re/Im, sharing one zoomable
-  frequency axis), the noise-wave parameters, the calibrated load
-  temperatures against the known ones (the hot load with its cable loss
-  removed; values or residuals), and the calibration spectra (with
-  waterfalls of the change over time on demand). A calibration run with the
-  same options earlier is shown at once.
+* **Calibrations** (`/calibrations`): the receiver calibration of a day,
+  from edges-pipeline. On load it shows the day's **stored pipeline
+  calibration** (the pipeline's default settings, computed by its cron for
+  every calibration day; nothing is computed here): the residuals of the
+  four loads (calibrated − known, or the values), the noise-wave
+  parameters, the modelled S11s of the loads and the receiver, the hot-load
+  loss, the issues, and its settings and configuration hash. Days without a
+  calibration are listed with the reason (none were taken in 2024–2025;
+  2022_316 has no temperature log; 2026_257's S11 session mixes VNA grids).
+  Changing a setting (cterms, wterms, the fit band, S11 model terms, probes,
+  …) asks the server whether it is still the default; if not, **Run**
+  computes the calibration with those settings in the background with the
+  pipeline's own code (`rcal.calibrate_day`, ~45 s, ~2 GB), labelled as
+  computed. The S11 session is always the one the catalog recommends, and
+  the fit band is also the calibration band. Another stored configuration
+  (e.g. the old Alan-mode products) can be overlaid for comparison.
 * **Detailed Data View** (`/data`): choose a night, the antenna S11
-  session and its fit window on the left; the calibration is the one
-  selected on the Calibrations tab (run first if needed). Click **Run**
+  session and its fit window on the left; the receiver calibration is the
+  one selected on the Calibrations tab (a computed one runs first if
+  needed). Click **Run**
   (~30 s per night); the plots load on the right: the night-mean P_ant,
   P_load, P_LNS, Q, R = P_load/(P_LNS − P_load) and uncalibrated
   temperature (default axis limits: the central 90% of the values in the
@@ -272,23 +285,18 @@ launching the backend.
 | `EDGES_BEAM_FACTOR_FILE` | `/data4/vydula/edges/packages/edges3-data-analysis/data/e3_beam_factor.hickle` (canonical; falls back to `<RAW_DATA_ROOT>/../../../e3_beam_factor.hickle` then `/mnt/data5/...`, `/scratch/...`, `$HOME/edges/...`) | Path to the EDGES-3 antenna beam factor file. Required for the absolute temperature calibration; the canonical path ships with the `edges-3-data-analysis` package. Set this explicitly only if the file lives somewhere else. |
 | `EDGES_PIPELINE_ROOT` | `/data6/edges/edges-db` | Where the catalog (`catalog.sqlite`), products database (`products.sqlite`) and QL/L1 products live (read by `/api/*`; read only) |
 | `EDGES_PYTHON` | current interpreter (`sys.executable`) | Python the backend shells out to when running the pipeline |
-| `EDGES_PROBE_AMBIENT` | `100` | Temperature-log code for the ambient-load cal (100 is the *front end*; see [Open questions](#open-questions)) |
-| `EDGES_PROBE_HOT` | `102` | Temperature-log code for the hot-load cal |
+| `EDGES_PROBE_AMBIENT` | `101` | Temperature-log code of the ambient load, shown per antenna file on the Detailed Data View (information only) |
 | `EDGES_PROBE_COLD_LOAD` | `152` | Code 152 is `pr59_current`, **not a temperature**; informational only, not used by the calibration |
 | `EDGES_ALLOWED_ORIGINS` | `http://localhost:5173, http://127.0.0.1:5173, http://localhost:8003, http://127.0.0.1:8003` | Comma-separated CORS allowlist for the API. Loopback origins are always allowed; when the SPA is hosted on a different host than the backend, set this to the SPA's origin (e.g. `https://edges.example.com`). Never set it to `*`. |
 
-Calibration temperatures are the probe readings at the time of each
-calibration spectrum, from the catalog's housekeeping (de-duplicated, and
-without the logs of other receivers such as the Adak system), and are
-passed straight to the EDGES receiver calibration — there are no
-user-tunable setpoints. For each spectrum: the `.tmp` snapshot of that
-load at the hour of its time stamp; else the nearest temperature-log
-reading of *that* probe within 15 minutes; else the internal constants
-(`306.5`, `393.22` K), which the Calibrations tab reports as an issue.
-The calibration of the antenna itself needs no probe temperature: Q is
-converted to an approximate temperature with the same nominal values
-(`T_LOAD = 300 K`, `T_NS = 1000 K`) that `alancal_edges3` writes
-`specal.txt` with, so the calibration is self-consistent.
+The receiver calibration's inputs are the pipeline's: the full S11 session
+the catalog recommends for the day, and the mean temperature-log readings
+of probes 101 (ambient load) and 102 (hot load) during those spectra (the
+probes are settings on the Calibrations tab). The calibration of the
+antenna needs no probe temperature: Q is converted to an approximate
+temperature with the calibration's own Dicke convention
+(`t_load = 300 K`, `t_load_ns = 1000 K`), which the calibrator then
+calibrates.
 
 The values above are documented programmatically in
 `backend/config.py::describe()`. Run `python backend/config.py` to print
@@ -310,15 +318,13 @@ Deleting it only means runs are recomputed when next requested.
 
 ```
 outputs/
-├── calibration/<id>/          # one receiver calibration (id = hash of its key)
-│   ├── request.json  inputs.json  params.json  status.json  log.txt
-│   ├── calibration/            # alancal_edges3 outputs (specal.txt, calibrated_temps.txt, ...)
-│   ├── s11_cache/              # S11 files resampled onto one grid (if the VNA grid changed)
-│   ├── result.json             # summary: dates, parameters, temperatures, warnings
-│   ├── plots.npz               # S11s, noise-wave parameters, load temperatures, spectra
-│   └── waterfalls.npz          # calibration spectra over time
+├── calibration/<id>/          # a receiver calibration with non-default settings
+│   ├── request.json  params.json  status.json  log.txt
+│   ├── rcal.h5                 # the solution, in the layout of a stored rcal product
+│   └── result.json             # what the page plots (as /api/calibrations/stored/<day>)
 └── observation/<id>/          # one night with one calibration
     ├── request.json  inputs.json  params.json  status.json  log.txt
+    ├── calibration.json        # which calibration (a stored product, or a run above)
     ├── result.json
     ├── plots.npz               # night-mean spectra, a/b, T_cal, antenna S11
     └── waterfalls.npz          # Q and T_cal per cycle (0.25 MHz bins)
@@ -328,29 +334,26 @@ outputs/
 
 ## Pipeline stages (`run_single_day.py`)
 
-The backend resolves each run's inputs in the catalog
-(`catalog_inputs.resolve_calibration` / `resolve_observation`: the exact
-files, the S11 session, the probe temperatures and any issues) and writes
-them to `inputs.json`. Then:
+**Calibration** (`--stage calibration`), only for non-default settings
+(the default is stored by the pipeline for every day):
+`edges_pipeline.stages.rcal.calibrate_day(day, params)` (the pipeline's own
+code; it takes the inputs from the catalog), then save the solution
+(`rcal.h5`) and the JSON the page plots (`result.json`). If the pipeline
+cannot calibrate the day it says why (e.g. `no_temperature`) and the run
+fails with that reason. The site never calls `edges.cal` itself.
 
-**Calibration** (`--stage calibration`):
-
-1. Run the EDGES receiver calibration (`alancal_edges3`) with the ambient
-   and hot-load probe readings as the known load temperatures (S11 files
-   resampled onto a common grid first if the VNA was reconfigured).
-2. Save the modelled S11s (loads and receiver), the noise-wave parameters
-   (`T_sca`, `T_off`, `T_unc`, `T_cos`, `T_sin`), the calibrated load
-   temperatures and the known ones (the hot load also with its cable loss
-   removed: `T_hot = (T_in − (1 − G) T_amb) / G`), and the calibration
-   spectra (mean Q and its change over time).
-
-**Observation** (`--stage observation`), for each antenna file of the night
-(one at a time):
+**Observation** (`--stage observation`): the backend resolves the night's
+inputs in the catalog (`catalog_inputs.resolve_observation`: the exact
+files, the antenna S11 session and any issues) into `inputs.json`, and
+names the calibration in `calibration.json`. Then, for each antenna file of
+the night (one at a time):
 
 1. Keep the cycles inside the night; compute Q, R and the uncalibrated
-   temperature `T_NS Q + T_LOAD`.
-2. Calibrate with the calibration's `specal.txt` and the antenna S11 model
-   (fitted in its window, NaN outside): `T_cal = a Q + b`.
+   temperature `t_load_ns Q + t_load`.
+2. Calibrate with the receiver calibration (rebuilt by
+   `edges_pipeline.products.rcal_calibrator`, stored or computed alike) and
+   the antenna S11 model (fitted in its window, NaN outside):
+   `T_cal = a Q + b`.
 3. Accumulate night means and waterfalls; save a, b and the antenna S11.
 
 ---
@@ -361,8 +364,10 @@ them to `inputs.json`. Then:
 
 They build a tiny synthetic field mirror in a temporary directory, ingest
 it with `edges-catalog` and run the `edges-pipeline` QL and L1 stages on
-it (they are skipped if those packages are not installed); the job runner
-is tested with a fake stage script:
+it (they are skipped if those packages are not installed). Stored
+calibrations are faked in its products database (as the pipeline's tests
+do); computations run the real calibration stage with
+`rcal.calibrate_day` mocked, and nights a fake stage script:
 
 ```bash
 uv pip install pytest httpx
@@ -374,16 +379,15 @@ python -m pytest tests
 
 ```bash
 cd backend
-python run_single_day.py --stage calibration --cal_date 2026_267 \
-    --run_dir /path/to/cal
-python run_single_day.py --stage observation --night 2026-09-25 \
-    --calibration_dir /path/to/cal --run_dir /path/to/obs
+echo '{"fit": {"cterms": 7}}' > params.json
+python run_single_day.py --stage calibration --day 2026_267 \
+    --params params.json --run_dir /path/to/cal
+python run_single_day.py --stage observation --inputs inputs.json \
+    --calibration calibration.json --run_dir /path/to/obs
 ```
 
-Dates are resolved in the catalog as the backend does (`Latest` by
-default; `--s11_date` / `--ant_s11` default to the recommended sessions)
-and the inputs are written to `<run_dir>/inputs.json`; or pass
-`--inputs inputs.json` (and `--params params.json`). Run with `--help`
+An observation's `inputs.json` and `calibration.json` are easiest to copy
+from a run the site made (`outputs/observation/<id>/`). Run with `--help`
 for the options.
 
 ---
@@ -415,10 +419,10 @@ All generated artefacts (runs, their `.npz` files and zips) go to
 
 To confirm with the team (the defaults are unchanged for now):
 
-* **Ambient-load probe.** `EDGES_PROBE_AMBIENT` defaults to code 100,
-  which the catalog and `edges-analysis` call `front_end_temperature`;
-  code 101 is `amb_load_temperature`. Should the ambient-load calibration
-  temperature (`tcold`) use 101?
+* **Ambient-load probe.** The pipeline's calibration uses code 101
+  (`amb_load_temperature`); the site's own Alan-mode runs used 100
+  (`front_end_temperature`). To confirm with the team; 100 can be chosen on
+  the Calibrations tab (a computed calibration).
 * **Antenna S11 fit window.** The default is 58–105 MHz, where the
   EDGES-3 antenna is matched (|S11| ≈ 0.16–0.27); outside it |S11| rises to
   ~0.9 and one model fits ~300× worse, so a, b and T_cal are only produced

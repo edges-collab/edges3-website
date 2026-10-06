@@ -129,6 +129,9 @@ def test_stored_calibration_of_another_config(client):
     d = c.get(f"/api/calibrations/stored/{CAL_DATE}", params={"config_hash": h}).json()
     assert not d["is_default"] and d["config_hash"] == h
     assert d["loads"]["ambient"]["calibrated"][0] == pytest.approx(300.5)
+    # laid out as the Alan-mode (rcal v1) products: no load S11s, the loss as a table
+    assert d["loads"]["open"]["s11_re"] is None
+    assert len(d["hot_load_loss"]) == len(d["freq_mhz"]) and d["hot_load_loss"][0] == pytest.approx(0.98)
 
 
 @pytest.mark.parametrize(

@@ -28,8 +28,7 @@ export default function ObservationPlots({ detail }: Props) {
   const [showWf, setShowWf] = useState(q.get("waterfalls") === "1")
   if (error) return <div className="alert alert-danger">{error}</div>
   if (!data) return <div className="text-muted p-3">Loading the night…</div>
-  const cp = res.calibration.params
-  const band: [number, number] = [cp.fstart, cp.fstop]
+  const band = res.calibration_band_mhz
   const win = res.ant_s11_window_mhz
   const winView: [number, number] = [win[0] - 5, win[1] + 5]
 
@@ -73,8 +72,10 @@ export default function ObservationPlots({ detail }: Props) {
   return (
     <div className="d-flex flex-column gap-3">
       <div className="small text-muted">
-        Night of {res.night.date}: {res.n_cycles} cycles from {res.files.length} files; calibration{" "}
-        {res.calibration.dates.cal} (S11 {res.calibration.dates.s11}); antenna S11 {res.dates.ant_s11};{" "}
+        Night of {res.night.date}: {res.n_cycles} cycles from {res.files.length} files; receiver calibration{" "}
+        {res.calibration.cal_day} ({res.calibration.source === "stored" ? "stored pipeline calibration" : "computed with other settings"},
+        config {res.calibration.config_hash?.slice(0, 12)}{res.calibration.s11_session ? `, S11 ${res.calibration.s11_session}` : ""});
+        antenna S11 {res.dates.ant_s11};{" "}
         {res.seconds} s. <a href={withBaseUrl(`/api/runs/observation/${detail.id}/download`)}>Download (zip)</a>
       </div>
 

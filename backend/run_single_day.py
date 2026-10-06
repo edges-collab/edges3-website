@@ -293,6 +293,9 @@ def run_observation(
     tic = time.time()
     run_dir.mkdir(parents=True, exist_ok=True)
     calobs, t_load, t_load_ns = load_calibrator(calibration)
+    if calibration["source"] == "computed":  # its S11 session is known once computed
+        done = json.loads((Path(calibration["path"]).parent / "result.json").read_text())
+        calibration = {**calibration, "s11_session": done.get("s11_session")}
     print(f"[run] receiver calibration {calibration.get('cal_day')} ({calibration['source']},"
           f" config {str(calibration.get('config_hash'))[:12]})")
     night = inputs["night"]
