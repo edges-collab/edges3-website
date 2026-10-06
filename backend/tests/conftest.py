@@ -23,6 +23,12 @@ A calibration day, 2025-04-12 (``2025_102``):
 - an ambient-load ``.tmp`` snapshot for 03:00 (probe 100 = 27 C);
 - a temperature log every 5 min over 03:30-06:30 UTC (hot load 111 C, probe
   100 = 25 C), so the ambient spectrum has only its snapshot.
+
+Its receiver calibration is faked in the products database (as
+``edges-pipeline/tests/test_calibration.py`` does), with a trivial solution
+``T = 1000 Q + 300`` (C1 = 1, C2 = 0, no noise waves, a matched receiver):
+in the default configuration (rcal version 2), and in another one
+(:data:`ALT_PARAMS`, standing in for the old Alan-mode products).
 """
 
 from __future__ import annotations
@@ -57,6 +63,8 @@ S11_LABELS = (
     "amb", "hot", "open", "short", "L", "O", "S", "lna", "lna_L", "lna_O", "lna_S", "ant",
 )
 CYCLE_S = 23
+#: Settings of the second stored rcal configuration.
+ALT_PARAMS = {"fit": {"cterms": 9}}
 
 
 def _age(path: Path, hours: float = 5) -> None:
@@ -112,6 +120,80 @@ def templog_block(t: datetime, hot: float = 111.0) -> str:
     )
 
 
+def rcal_arrays(offset: float = 0.0) -> dict:
+    """A trivial rcal v2 solution, T = 1000 Q + 300, with all four loads."""
+    f = np.arange(40.0, 190.01, 0.5)
+    zero = np.zeros_like(f)
+    out = {
+        "freq_mhz": f,
+        "nw_Tsca": np.full_like(f, 1000.0),
+        "nw_Toff": np.full_like(f, 300.0),
+        "nw_Tunc": zero, "nw_Tcos": zero, "nw_Tsin": zero,
+        "receiver_s11_re": zero, "receiver_s11_im": zero,
+        "load_freq_mhz": f,
+        "hot_load_loss": np.full_like(f, 0.99),
+    }
+    for i, (name, t) in enumerate((("ambient", 300.0), ("hot_load", 385.0),
+                                   ("open", 300.0), ("short", 300.0))):
+        out[f"calibrated_{name}"] = np.full_like(f, t + 0.1 * i + offset)
+        out[f"known_{name}"] = np.full_like(f, t)
+        out[f"s11_{name}_real"] = np.full_like(f, 0.1 * i)
+        out[f"s11_{name}_imag"] = np.full_like(f, -0.05)
+    return out
+
+
+def fake_rcal(settings, day: str, params=None, arrays=None) -> str:
+    """Insert a finished rcal task, product and summary row; return its path.
+
+    The first configuration registered becomes the readers' default (as after
+    a complete packaged run).
+    """
+    from edges_pipeline.config import StageConfig
+    from edges_pipeline.db import connect, utcnow
+    from edges_pipeline.runner import register_config
+    from edges_pipeline.stages import rcal
+    from edges_pipeline.stages.common import write_product
+
+    cfg = StageConfig("rcal", "test", params or {}, rcal.STAGE_VERSION)
+    con = connect(settings.products_db)
+    register_config(con, cfg)
+    key = f"rcal:edges3-mro:{day}:{cfg.config_hash[:8]}"
+    dest = settings.products_root / "RCAL" / f"{key.replace(':', '_')}.h5"
+    metrics = {"method": "edges.cal", "t_load": 300.0, "t_load_ns": 1000.0,
+               "issues": ["no full S11 session earlier that day; using 2025-04-11T05:00:00+00:00"],
+               "n_readings": {"ambient": 7, "hot": 7},
+               "spectra": {"amb": [f"{day}_03_00_00_amb.acq"]}}
+    write_product(dest, metrics, arrays or rcal_arrays(),
+                  {"t_load": 300.0, "t_load_ns": 1000.0, "config": cfg.algorithm_params})
+    t_end = CAL_DAY.timestamp() + 7 * 3600
+    with con:
+        tid = con.execute(
+            "INSERT INTO task (stage, config_hash, input_key, input_path, status,"
+            " attempts, updated_utc, unit) VALUES (?,?,?,?,'done',1,?,?)",
+            ("rcal", cfg.config_hash, key, str(dest), utcnow(), f"rcal:edges3-mro:{day}"),
+        ).lastrowid
+        con.execute(
+            "INSERT INTO product (task_id, kind, path, size, sha256, created_utc)"
+            " VALUES (?,?,?,?,?,?)",
+            (tid, "rcal_h5", str(dest), dest.stat().st_size, key, utcnow()),
+        )
+        con.execute(
+            "INSERT OR IGNORE INTO stage_default (stage, config_hash, set_utc) VALUES (?,?,?)",
+            ("rcal", cfg.config_hash, utcnow()),
+        )
+        row = {"task_id": tid, "deployment": "edges3-mro", "cal_day": day,
+               "t_start_unix": t_end - 4 * 3600, "t_end_unix": t_end, "s11_session": S11_GOOD,
+               "t_ambient_k": 300.15, "t_hot_k": 384.15, "t_load": 300.0, "t_load_ns": 1000.0,
+               "rms_ambient_k": 0.0, "rms_hot_k": 0.1, "rms_open_k": 0.2, "rms_short_k": 0.3,
+               "f_low_mhz": 40.0, "f_high_mhz": 190.0}
+        con.execute(
+            f"INSERT INTO rcal_day ({','.join(row)}) VALUES ({','.join('?' * len(row))})",
+            tuple(row.values()),
+        )
+    con.close()
+    return str(dest)
+
+
 def build_env(tmp: Path):
     from edges_catalog.config import Config
     from edges_catalog.ingest import ingest
@@ -162,6 +244,8 @@ def build_env(tmp: Path):
     ql_cfg.write_text('stage = "ql"\nname = "all"\n[select]\nloads = ["ant"]\n')
     run_ql(settings, ql_cfg, workers=1, max_mbps=None)
     run_l1(settings, workers=1, max_mbps=None)
+    fake_rcal(settings, CAL_DATE)  # the default configuration
+    fake_rcal(settings, CAL_DATE, ALT_PARAMS, rcal_arrays(offset=0.5))
     return settings
 
 

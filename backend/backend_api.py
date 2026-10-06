@@ -9,8 +9,9 @@ Routers
 ``products_api``   GET /api/night, /api/nights/latest, ... — the Nightly
                    Overview, from precomputed QL/L1 products (read only)
 ``runs_api``       /api/calibrations/..., /api/observations/..., /api/runs/...
-                   — calibration and observation runs of ``run_single_day.py``
-                   as background jobs, with inputs from the catalog
+                   — receiver calibrations from edges-pipeline (stored, or
+                   computed with other settings as a background job) and
+                   nights calibrated with them (background jobs)
 
 Other endpoints
 ---------------
@@ -24,7 +25,8 @@ etc.). The built SPA is served from ``frontend/dist/`` at ``/`` with a
 catch-all fallback that returns ``index.html`` for React Router paths.
 
 Nothing here scans or writes the raw data tree: inputs come from the EDGES
-catalog (``catalog_inputs.py``) and outputs go to ``OUTPUT_ROOT``.
+catalog (``catalog_inputs.py``) and edges-pipeline (``calibrations.py``), and
+outputs go to ``OUTPUT_ROOT``.
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ from typing import Any, Dict
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -53,6 +56,8 @@ log = logging.getLogger("edges.api")
 config.ensure_dirs()
 
 app = FastAPI(title="EDGES-3 Web API")
+# A calibration is ~0.9 MB of JSON (~0.2 MB compressed).
+app.add_middleware(GZipMiddleware, minimum_size=4096)
 app.add_middleware(
     CORSMiddleware,
     # Never "*" — an open CORS policy lets any website trigger the
