@@ -70,7 +70,7 @@ export default function Calibrations() {
             <option value="Latest">Latest{latest ? ` (${latest})` : ""}</option>
             {[...(list?.stored ?? [])].reverse().map((r) => (
               <option key={r.cal_day} value={r.cal_day}>
-                {r.cal_day} — open/short RMS {r.rms_open_k.toFixed(1)}/{r.rms_short_k.toFixed(1)} K
+                {r.cal_day} — open/short RMS {r.rms_open_k?.toFixed(1) ?? "–"}/{r.rms_short_k?.toFixed(1) ?? "–"} K
               </option>
             ))}
             {(list?.missing ?? []).length > 0 && (
@@ -83,6 +83,12 @@ export default function Calibrations() {
           </select>
         </label>
         {list && <div className="small text-muted mb-2">{list.note}</div>}
+        {list?.version_skew && (
+          <div className="alert alert-warning small py-1 px-2">
+            The site's edges-pipeline ({list.pipeline}) is not the version that made the stored
+            calibrations: a computed one will differ from them by more than its settings.
+          </div>
+        )}
 
         <div className="mt-2 mb-1 small fw-semibold">Settings (edges-pipeline rcal)</div>
         {list?.fields.filter((f) => f.main).map(field)}
@@ -136,8 +142,14 @@ export default function Calibrations() {
                   Config <code>{short(resolved.config_hash)}</code> (default{" "}
                   <code>{short(resolved.default_hash)}</code>), by edges-pipeline {resolved.pipeline}.
                 </div>
-                <RunStatusBox status={resolved.status} detail={detail} onRun={start}
-                  what="Calibration" seconds="~45 s" />
+                {resolved.unavailable ? (
+                  <div className="alert alert-warning py-1 px-2 mt-2 mb-0">
+                    {resolved.day} cannot be calibrated with any settings: {resolved.unavailable}.
+                  </div>
+                ) : (
+                  <RunStatusBox status={resolved.status} detail={detail} onRun={start}
+                    what="Calibration" seconds="~45 s" />
+                )}
                 {detail?.status.state === "done" && (
                   <a className="d-block mt-1" href={withBaseUrl(`/api/runs/calibration/${detail.id}/download`)}>
                     Download (zip: the solution and its JSON)

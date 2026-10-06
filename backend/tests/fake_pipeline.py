@@ -21,6 +21,8 @@ def calibrate_day(day, params=None, deployment="edges3-mro", settings=None):
     from edges_pipeline.stages import rcal
 
     key = _cal_day_key(day)
+    if os.environ.get("FAKE_KEYERROR"):
+        raise KeyError("t_load")  # a bug, not a reason
     if os.environ.get("FAKE_CANNOT"):
         raise LookupError(f"cannot calibrate {key}: {os.environ['FAKE_CANNOT']}")
     expected = os.environ.get("FAKE_CATALOG_DB")

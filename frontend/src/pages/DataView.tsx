@@ -101,8 +101,10 @@ export default function DataView() {
             <div className="mt-2"><Issues issues={inputs.issues} /></div>
           </div>
         )}
-        <RunStatusBox status={r?.status ?? null} detail={detail} onRun={start}
-          what="Night" seconds={cal?.source === "computed" && cal.status?.state !== "done" ? "~1.5 min" : "~30 s"} />
+        {!cal?.unavailable && (
+          <RunStatusBox status={r?.status ?? null} detail={detail} onRun={start}
+            what="Night" seconds={cal?.source === "computed" && cal.status?.state !== "done" ? "~1.5 min" : "~30 s"} />
+        )}
       </aside>
 
       <section className="flex-grow-1" style={{ minWidth: 0 }}>
@@ -112,7 +114,9 @@ export default function DataView() {
           <div className="text-muted p-4 border rounded">
             {detail && (detail.status.state === "queued" || detail.status.state === "running")
               ? "Processing the night; its plots will appear here."
-              : r
+              : cal?.unavailable
+                ? `There is no receiver calibration for ${cal.day} (${cal.unavailable}): choose another day on the Calibrations tab.`
+                : r
                 ? "This night has not been processed with these options yet: click Run on the left."
                 : "Resolving the night's inputs in the catalog…"}
           </div>

@@ -68,11 +68,10 @@ export type StoredRow = {
   s11_session: string
   t_ambient_k: number
   t_hot_k: number
-  rms_ambient_k: number
-  rms_hot_k: number
-  rms_open_k: number
-  rms_short_k: number
-  path: string
+  rms_ambient_k: number | null
+  rms_hot_k: number | null
+  rms_open_k: number | null
+  rms_short_k: number | null
   config_hash: string
 }
 
@@ -93,6 +92,8 @@ export type CalibrationList = {
   defaults: Record<string, Record<string, unknown>>
   fields: CalField[]
   default_hash: string | null
+  /** the installed edges-pipeline cannot reproduce the stored calibrations */
+  version_skew: boolean
   other_configs: { config_hash: string; name: string; created_utc: string; code_version: string; n_done: number }[]
   pipeline: string
 }
@@ -104,6 +105,7 @@ export type CalibrationResolved = {
   config_hash: string
   default_hash: string | null
   is_default: boolean
+  version_skew: boolean
   pipeline: string
   source: "stored" | "computed"
   id: string | null
@@ -151,7 +153,7 @@ export type RunDetail<I, R> = {
 export type Resolvable = { id: string | null; status: RunStatus | null }
 
 export type Resolved<I> = {
-  id: string
+  id: string | null
   params: Record<string, number>
   inputs: I
   status: RunStatus | null

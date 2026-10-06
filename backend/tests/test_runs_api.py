@@ -96,7 +96,7 @@ def test_calibration_list(client):
     assert [r["cal_day"] for r in d["stored"]] == [CAL_DATE]
     assert d["stored"][0]["s11_session"] == S11_GOOD
     assert d["missing"] == []  # the only catalog calibration day is stored
-    assert d["default_hash"] == rcal.config_hash()
+    assert d["default_hash"] == rcal.config_hash() and not d["version_skew"]
     assert [o["config_hash"] for o in d["other_configs"]] == [rcal.config_hash(ALT_PARAMS)]
     assert d["defaults"]["fit"]["cterms"] == 6
     keys = {(f["section"], f["key"]) for f in d["fields"]}
@@ -154,6 +154,8 @@ def test_resolve(client):
     r = c.post("/api/calibrations/resolve", json={}).json()
     assert r["day"] == CAL_DATE and r["source"] == "stored" and r["is_default"]
     assert r["stored"]["cal_day"] == CAL_DATE and r["id"] is None
+    # no server paths in responses
+    assert "path" not in r["stored"] and not any(k.startswith("_") for k in r)
     # equal settings, written differently: still the stored default
     same = c.post("/api/calibrations/resolve", json={"params": {"fit": {"cterms": 6.0}}}).json()
     assert same["source"] == "stored" and same["params"] == {}
@@ -164,6 +166,10 @@ def test_resolve(client):
     # a day without a stored calibration: said, not an error
     gap = c.post("/api/calibrations/resolve", json={"day": "2026_257"}).json()
     assert gap["stored"] is None and "VNA" in gap["unavailable"]
+    # ... and no settings can calibrate it: nothing to run
+    gap = c.post("/api/calibrations/resolve", json={"day": "2026_257", "params": CUSTOM}).json()
+    assert gap["source"] == "computed" and gap["id"] is None and "VNA" in gap["unavailable"]
+    assert c.post("/api/calibrations", json={"day": "2026_257", "params": CUSTOM}).status_code == 400
 
 
 @pytest.mark.parametrize(
@@ -201,7 +207,8 @@ def test_compute_and_reuse(client):
     done = _wait(c, "calibration", r["id"])
     assert done["status"]["state"] == "done", done
     res = done["result"]
-    assert res["source"] == "computed" and res["params"] == CUSTOM
+    assert res["source"] == "computed" and res["params"]["fit"]["cterms"] == 7
+    assert done["request"]["overrides"] == CUSTOM
     assert res["product"] is None and res["config_hash"] == r["config_hash"]
     assert res["loads"]["ambient"]["calibrated"][0] == pytest.approx(300.07)
     assert res["config"]["fit"]["cterms"] == 7
@@ -222,8 +229,8 @@ def test_compute_and_reuse(client):
 def test_stored_and_computed_load_alike(client, settings):
     import run_single_day
 
-    c, _ = client
-    stored = c.post("/api/calibrations/resolve", json={}).json()["stored"]
+    prod = products_api.get_products()
+    stored = calibrations.product(prod, CAL_DATE, calibrations.default_config(prod)["hash"])
     cal, *_ = run_single_day.load_calibrator({"source": "stored", "path": stored["path"]})
     assert np.allclose(np.asarray(cal.calibrate_q(np.full(301, 0.5), np.zeros(301, complex))), 800.0)
 
@@ -248,7 +255,8 @@ def test_observation_with_the_stored_calibration(client):
     assert d["status"]["state"] == "done", d
     spec = d["result"]["calibration"]
     assert spec["source"] == "stored" and spec["cal_day"] == CAL_DATE
-    assert spec["path"] == r["calibration"]["stored"]["path"]
+    assert spec["path"].endswith(".h5") and spec["sha256"]
+    assert "_spec" not in r and "path" not in r["calibration"]["stored"]
     assert calls.read_text().split() == ["observation"]
     assert d["result"]["params"]["ant_s11_fstart"] == 58.0
 
@@ -267,10 +275,30 @@ def test_observation_runs_its_calibration_first(client):
     assert r["id"] != c.post("/api/observations/resolve", json={}).json()["id"]
 
 
-def test_observation_without_a_stored_calibration(client):
+def test_observation_without_a_calibration(client):
     c, _ = client
-    r = c.post("/api/observations", json={"calibration": {"day": "2026_257"}})
+    body = {"calibration": {"day": "2026_257"}}
+    # resolving says so (the page shows it), with nothing to run
+    r = c.post("/api/observations/resolve", json=body).json()
+    assert r["id"] is None and "VNA" in r["calibration"]["unavailable"]
+    assert r["inputs"]["night"]["date"] == "2025-04-10"
+    r = c.post("/api/observations", json=body)
     assert r.status_code == 400 and "VNA" in r.json()["detail"]
+
+
+def test_a_bug_is_not_a_reason(client, monkeypatch):
+    c, _ = client
+    monkeypatch.setenv("FAKE_KEYERROR", "1")
+    rid = c.post("/api/calibrations", json={"params": {"fit": {"cterms": 10}}}).json()["id"]
+    d = _wait(c, "calibration", rid)
+    assert d["status"]["state"] == "failed" and d["status"]["error"].startswith("exit 1")
+    assert "Traceback" in d["log_tail"]
+
+
+def test_queue_is_bounded(client, monkeypatch):
+    c, _ = client
+    monkeypatch.setattr(runs_api, "MAX_QUEUED", 0)
+    assert c.post("/api/calibrations", json={"params": {"fit": {"cterms": 15}}}).status_code == 503
 
 
 def test_failed_run_reports_and_retries(client, monkeypatch):

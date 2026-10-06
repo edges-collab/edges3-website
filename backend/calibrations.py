@@ -10,21 +10,25 @@ background job runner of ``runs_api``, never in a request). The pipeline picks
 the inputs from the catalog: the recommended full S11 session of the day and
 the probe means during the ambient and hot-load spectra.
 
-This module holds what both paths share: which settings the page offers
-(:data:`FIELDS`) and their validation (:func:`clean_params`), the day list
-with the reasons for days without a calibration (:func:`day_list`), and the
-JSON a page plots (:func:`calibration_json`), the same for a stored and a
-computed calibration.
+This module holds what both paths share: the readers' default configuration
+(:func:`default_config`), which settings the page offers (:data:`FIELDS`) and
+their validation (:func:`clean_params`), the day list with the reasons for
+days without a calibration (:func:`day_list`), and the JSON a page plots
+(:func:`calibration_json`), the same for a stored and a computed calibration.
 
-``params`` are the pipeline's: ``{section: {key: value}}`` overriding
-``rcal.DEFAULT_CONFIG`` (sections ``spectra``, ``fit``, ``hardware``,
-``temperatures``, ``dicke``). ``fstart``/``fstop`` are always
-``wfstart``/``wfstop`` (edges-collab/edges-analysis#305), and the S11 session
-is the catalog's recommendation (the stage has no setting for either).
+The page's settings are *overrides* of the readers' default configuration
+(the promoted one, whose settings the products database records), by
+section: ``{"fit": {"cterms": 7}}`` (sections ``spectra``, ``fit``,
+``hardware``, ``temperatures``, ``dicke``). No overrides means the stored
+calibration. ``fstart``/``fstop`` are always ``wfstart``/``wfstop``
+(edges-collab/edges-analysis#305), and the S11 session is the catalog's
+recommendation (the stage has no setting for either).
 """
 
 from __future__ import annotations
 
+import copy
+import json
 import math
 import threading
 import time
@@ -47,7 +51,8 @@ except ImportError:  # optional: products_api.get_products() answers 503
 LATEST = "Latest"
 LOADS = ("ambient", "hot_load", "open", "short")
 
-#: Days the pipeline cannot calibrate, and why (edges-database ISSUES).
+#: Days the pipeline cannot calibrate whatever the settings, and why
+#: (edges-database ISSUES).
 KNOWN_GAPS = {
     "2022_316": "no temperature-log coverage of its calibration spectra",
     "2026_257": "its S11 session mixes VNA frequency grids (DATA_ISSUES #29)",
@@ -55,7 +60,7 @@ KNOWN_GAPS = {
 GAPS_NOTE = (
     "No calibrations were taken in 2024–2025. 2022_316 has no temperature log and "
     "2026_257's S11 session mixes VNA grids, so neither has a calibration. "
-    "New days appear within about 12 hours."
+    "New days appear within about 12 hours of their data."
 )
 #: A day newer than this without a stored calibration is "not processed yet".
 NEW_DAY_S = 2 * 86400
@@ -100,8 +105,37 @@ def available() -> bool:
     return rcal is not None
 
 
-def clean_params(params: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """Check the page's settings; return only those that differ from the default.
+def default_config(prod: Any) -> Dict[str, Any]:
+    """The readers' default rcal configuration.
+
+    ``hash``: the promoted configuration (else the newest with products; None
+    if there are none); ``config``: its settings (else ``rcal.DEFAULT_CONFIG``);
+    ``skew``: the installed edges-pipeline computes another hash for those
+    settings (a different stage version), so a computation never reproduces
+    the stored calibrations exactly.
+    """
+    try:
+        h = prod.config_hash("rcal")
+    except LookupError:
+        h = None
+    config = copy.deepcopy(rcal.DEFAULT_CONFIG)
+    if h:
+        df = prod.sql("SELECT config_text FROM stage_config WHERE config_hash = ?", (h,))
+        if len(df):
+            config = json.loads(df.config_text.iloc[0])
+    return {"hash": h, "config": config, "skew": bool(h) and rcal.config_hash(config) != h}
+
+
+def effective(defaults: Dict[str, Any], params: Dict[str, Any]) -> Dict[str, Any]:
+    """The full settings: ``params`` (overrides) applied to ``defaults``."""
+    out = copy.deepcopy(defaults)
+    for section, values in params.items():
+        out.setdefault(section, {}).update(values)
+    return out
+
+
+def clean_params(params: Optional[Dict[str, Any]], defaults: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Check the page's settings; return only those that differ from ``defaults``.
 
     Raises ``ValueError`` (a 400) for unknown keys, non-numbers, values out of
     range or a fit band narrower than :data:`MIN_BAND_MHZ`.
@@ -126,23 +160,24 @@ def clean_params(params: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
             if integer and not x.is_integer():
                 raise ValueError(f"{section}.{key} must be a whole number")
             x = int(x) if integer else x
-            if x != rcal.DEFAULT_CONFIG[section][key]:
+            if x != defaults.get(section, {}).get(key):
                 out.setdefault(section, {})[key] = x
-    fit = {**rcal.DEFAULT_CONFIG["fit"], **out.get("fit", {})}
+    fit = effective(defaults, out)["fit"]
     if fit["wfstop"] - fit["wfstart"] < MIN_BAND_MHZ:
         raise ValueError(f"the fit band must be at least {MIN_BAND_MHZ:g} MHz wide")
-    rcal.effective_config(out)  # the stage's own check
+    rcal.effective_config(effective(defaults, out))  # the stage's own check
     return out
 
 
-def config_hash(params: Dict[str, Any]) -> str:
-    return rcal.config_hash(params)
+def config_hash(settings: Dict[str, Any]) -> str:
+    """The configuration hash of full settings (:func:`effective`)."""
+    return rcal.config_hash(settings)
 
 
-def form() -> Dict[str, Any]:
-    """The settings form: fields by section, with the defaults."""
+def form(defaults: Dict[str, Any]) -> Dict[str, Any]:
+    """The settings form: fields by section, with the default settings."""
     return {
-        "defaults": rcal.DEFAULT_CONFIG,
+        "defaults": defaults,
         "fields": [
             {"section": s, "key": k, "label": label, "min": lo, "max": hi,
              "integer": integer, "main": (s, k) in MAIN_FIELDS}
@@ -163,12 +198,20 @@ def _day_of(key: str) -> Optional[float]:
         return None
 
 
-def gap_reason(key: str, now: Optional[float] = None) -> str:
-    """Why a day has no stored calibration (as far as the site knows)."""
+def hopeless(key: str) -> Optional[str]:
+    """Why no settings can calibrate this day, if that is known."""
     if key in KNOWN_GAPS:
         return KNOWN_GAPS[key]
     if key[:4] in ("2024", "2025"):
         return "no calibrations were taken in 2024–2025"
+    return None
+
+
+def gap_reason(key: str, now: Optional[float] = None) -> str:
+    """Why a day has no stored calibration (as far as the site knows)."""
+    why = hopeless(key)
+    if why:
+        return why
     t = _day_of(key)
     if t is not None and (now or time.time()) - t < NEW_DAY_S:
         return "not processed yet: new days appear within about 12 hours"
@@ -177,10 +220,13 @@ def gap_reason(key: str, now: Optional[float] = None) -> str:
 
 def stored_rows(prod: Any) -> List[Dict[str, Any]]:
     """The stored default calibrations, oldest first (summary columns only)."""
-    df = prod.calibrations()
+    try:
+        df = prod.calibrations()
+    except LookupError:  # no rcal products at all yet
+        return []
     cols = ["cal_day", "s11_session", "t_ambient_k", "t_hot_k", "rms_ambient_k",
             "rms_hot_k", "rms_open_k", "rms_short_k", "t_start_unix", "t_end_unix",
-            "t_load", "t_load_ns", "path", "config_hash"]
+            "t_load", "t_load_ns", "config_hash"]
     df = df[[c for c in cols if c in df.columns]].sort_values("cal_day")
     return [{k: _scalar(v) for k, v in r.items()} for r in df.to_dict("records")]
 
@@ -204,6 +250,20 @@ def latest_day(prod: Any) -> str:
 
 def stored_row(prod: Any, key: str) -> Optional[Dict[str, Any]]:
     return next((r for r in stored_rows(prod) if r["cal_day"] == key), None)
+
+
+def product(prod: Any, key: str, config_hash: str,
+            deployment: str = "edges3-mro") -> Optional[Dict[str, Any]]:
+    """The stored product of a day: ``path``, ``sha256`` (of the file) and
+    ``input_key`` (of its inputs: it changes when the pipeline reprocesses
+    the day because an input changed). None if there is none."""
+    df = prod.sql(
+        "SELECT p.path, p.sha256, t.input_key FROM rcal_day s JOIN task t ON t.id = s.task_id"
+        " JOIN product p ON p.task_id = t.id WHERE t.status = 'done' AND t.config_hash = ?"
+        " AND s.deployment = ? AND s.cal_day = ? ORDER BY t.id DESC LIMIT 1",
+        (config_hash, deployment, key),
+    )
+    return None if df.empty else {k: str(v) for k, v in df.iloc[0].items()}
 
 
 def other_configs(prod: Any, default: Optional[str]) -> List[Dict[str, Any]]:
@@ -320,29 +380,27 @@ def stored_json(
 ) -> Dict[str, Any]:
     """The stored calibration of a day as JSON; ``LookupError`` if there is none.
 
-    Cached by (day, config hash, product file): a reprocessing makes a new
-    product (or a new default hash), so a cached entry is never stale.
+    Cached by (day, config hash, product file and its checksum): a
+    reprocessing makes a new product (or a new default hash), so a cached
+    entry is never stale.
     """
     h = prod.config_hash("rcal", config_hash)
-    rows = prod.sql(
-        "SELECT p.path FROM rcal_day s JOIN task t ON t.id = s.task_id"
-        " JOIN product p ON p.task_id = t.id WHERE t.status = 'done'"
-        " AND t.config_hash = ? AND s.deployment = ? AND s.cal_day = ?",
-        (h, deployment, key),
-    )
-    ck = (key, h, str(rows.path.iloc[0]) if len(rows) else "")
+    p = product(prod, key, h, deployment)
+    if p is None:
+        raise LookupError(f"no receiver calibration for {key} ({h[:12]})")
+    ck = (key, h, p["path"], p["sha256"])
     with _cache_lock:
-        if ck in _cache:
+        out = _cache.get(ck)
+        if out is not None:
             _cache.move_to_end(ck)
-            return _cache[ck]
-    cal, info = prod.calibrator(key, deployment=deployment, config_hash=h)
-    out = calibration_json(cal, info, "stored")
-    out["is_default"] = h == prod.default_config("rcal")
-    with _cache_lock:
-        _cache[ck] = out
-        while len(_cache) > _CACHE_MAX:
-            _cache.popitem(last=False)
-    return out
+    if out is None:
+        cal, info = prod.calibrator(key, deployment=deployment, config_hash=h)
+        out = calibration_json(cal, info, "stored")
+        with _cache_lock:
+            _cache[ck] = out
+            while len(_cache) > _CACHE_MAX:
+                _cache.popitem(last=False)
+    return {**out, "is_default": h == default_config(prod)["hash"]}
 
 
 def clear_cache() -> None:

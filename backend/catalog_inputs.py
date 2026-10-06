@@ -322,7 +322,7 @@ def resolve_observation(cat: Any, night: str = LATEST, ant_s11: str = LATEST) ->
             issues.append(f"{os.path.basename(r.path)} is still being written: left out")
             continue
         # the ambient probe at each file (for information; the calibration of
-        # the antenna needs no probe temperature, see run_single_day.T_LOAD)
+        # the antenna needs no probe temperature)
         temps = _temperatures(cat, [
             ("obs_ambient", r.path, "ant", config.PROBE_AMBIENT, config.AMBIENT_FALLBACK_K),
         ], [])

@@ -417,7 +417,7 @@ All generated artefacts (runs, their `.npz` files and zips) go to
 
 ## Open questions
 
-To confirm with the team (the defaults are unchanged for now):
+To confirm with the team:
 
 * **Ambient-load probe.** The pipeline's calibration uses code 101
   (`amb_load_temperature`); the site's own Alan-mode runs used 100

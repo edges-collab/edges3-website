@@ -65,7 +65,7 @@ WF_BAND_MHZ = (40.0, 200.0)
 
 #: Exit code of the calibration stage when the pipeline cannot calibrate the
 #: day (``LookupError``: e.g. no temperature log, mixed S11 grids).
-EXIT_CANNOT_CALIBRATE = 2
+EXIT_CANNOT_CALIBRATE = 10
 #: The noise-wave solution a calibration run writes (an rcal product's layout).
 SOLUTION_FILE = "rcal.h5"
 
@@ -220,7 +220,8 @@ def _write_json(path: Path, payload: Any) -> None:
 def run_calibration(
     day: str, params: Dict[str, Any], run_dir: Path, catalog_db: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Compute one day's receiver calibration with edges-pipeline. Writes
+    """Compute one day's receiver calibration with edges-pipeline (``params``:
+    the full settings, by section). Writes
     ``rcal.h5`` (:func:`write_solution`) and ``result.json``
     (:func:`calibrations.calibration_json`)."""
     from edges_pipeline.stages import rcal
@@ -239,7 +240,7 @@ def run_calibration(
     cal, info = rcal.calibrate_day(day, params, settings=settings)
     write_solution(run_dir / SOLUTION_FILE, cal, float(info["t_load"]), float(info["t_load_ns"]))
     result = calibrations.calibration_json(cal, info, "computed")
-    result["params"] = params
+    result["params"] = params  # the full settings
     result["seconds"] = round(time.time() - tic, 1)
     for issue in result["issues"]:
         print(f"[run] issue: {issue}")
@@ -251,7 +252,7 @@ def run_calibration(
 def write_solution(path: Path, cal: Any, t_load: float, t_load_ns: float) -> None:
     """Save a noise-wave solution as an rcal (version 2) product holds it, so
     ``edges_pipeline.products.rcal_calibrator`` rebuilds it like a stored one.
-    (``edges.cal.Calibrator.write``/``from_file`` do not round-trip in edges 8.3.)"""
+    (``edges.cal.Calibrator.write``/``from_file`` did not round-trip in edges 8.3.)"""
     from edges_pipeline.stages.common import write_product
 
     rcv = np.asarray(cal.receiver_s11)
@@ -423,7 +424,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             p.error("--day is required for the calibration stage")
         try:
             run_calibration(args.day, params, run_dir, args.catalog_db)
-        except LookupError as e:  # the pipeline says why it cannot
+        except LookupError as e:
+            # the pipeline says why it cannot (not a KeyError/IndexError: a bug)
+            if type(e) is not LookupError:
+                raise
             print(f"[run] {e}")
             return EXIT_CANNOT_CALIBRATE
         return 0
