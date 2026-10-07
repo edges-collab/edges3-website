@@ -1,6 +1,7 @@
 /**
- * The calibration selected on the Calibrations tab: a day and the pipeline
- * settings that differ from the default (none: the stored calibration). The
+ * The calibration selected on the Calibrations tab: a day, the pipeline
+ * settings that differ from the default and optionally another S11 session
+ * (neither: the stored calibration). The
  * Detailed Data View uses it, so both tabs agree. Kept in localStorage per
  * browser (a selection saved in an older format is dropped).
  */
@@ -18,7 +19,8 @@ const isSettings = (p: unknown): boolean =>
 function load(): CalibrationRequest {
   try {
     const v = JSON.parse(window.localStorage.getItem(KEY) ?? "null")
-    if (v && typeof v.day === "string" && isSettings(v.params)) return v as CalibrationRequest
+    if (v && typeof v.day === "string" && isSettings(v.params) &&
+        (v.s11_session === undefined || typeof v.s11_session === "string")) return v as CalibrationRequest
   } catch {
     // unavailable or corrupt storage: use the default
   }

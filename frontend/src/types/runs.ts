@@ -55,13 +55,28 @@ export type CalibrationData = {
   issues: string[]
   config: Record<string, Record<string, unknown>>
   freq_mhz: Arr
-  loads: Record<string, { calibrated: Arr | null; known: Arr | null; s11_re: Arr | null; s11_im: Arr | null }>
+  loads: Record<string, {
+    calibrated: Arr | null
+    known: Arr | null
+    s11_re: Arr | null
+    s11_im: Arr | null
+    /** rcal v3+: the mean Q spectrum used in the fit, its per-cycle variance */
+    q: Arr | null
+    q_variance: Arr | null
+    /** rcal v3+: receiver (front-end) temperature during the spectrum, °C */
+    frontend_c: { mean: number; min: number; max: number } | null
+  }>
   hot_load_loss: Arr | null
   nw: { freq_mhz: Arr; Tsca: Arr; Toff: Arr; Tunc: Arr; Tcos: Arr; Tsin: Arr }
   receiver_s11: { re: Arr; im: Arr }
   params?: CalParams
+  /** a computed calibration with another S11 session than the recommended one */
+  s11_override?: string | null
   seconds?: number
 }
+
+/** Each calibration load's cycles (L1): band-median Q (60-90 MHz) and flags. */
+export type LoadCycles = Record<string, { time_unix: Arr; band_median_q: Arr; flagged: boolean[] } | null>
 
 export type StoredRow = {
   cal_day: string
@@ -87,7 +102,9 @@ export type CalField = {
 
 export type CalibrationList = {
   stored: StoredRow[]
-  missing: { cal_day: string; reason: string }[]
+  missing: { cal_day: string; status: string; reason: string }[]
+  /** full S11 sessions a computed calibration may use */
+  s11_sessions: string[]
   note: string
   defaults: Record<string, Record<string, unknown>>
   fields: CalField[]
@@ -102,10 +119,13 @@ export type CalibrationList = {
 export type CalibrationResolved = {
   day: string
   params: CalParams
+  s11_session: string | null
   config_hash: string
   default_hash: string | null
   is_default: boolean
   version_skew: boolean
+  /** without a stored calibration: what the pipeline made of the day */
+  day_status: { status: string; reason: string } | null
   pipeline: string
   source: "stored" | "computed"
   id: string | null
@@ -159,7 +179,7 @@ export type Resolved<I> = {
   status: RunStatus | null
 }
 
-export type CalibrationRequest = { day: string; params: CalParams }
+export type CalibrationRequest = { day: string; params: CalParams; s11_session?: string }
 export type ObservationRequest = {
   night: string
   ant_s11: string

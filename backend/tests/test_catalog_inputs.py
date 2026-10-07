@@ -6,7 +6,7 @@ import json
 import os
 
 import pytest
-from conftest import CAL_DATE, CAL_DAY, S11_GOOD, S11_OLD, T_A, T_B, T_C, UTC
+from conftest import CAL_DAY, S11_GOOD, S11_OLD, T_A, T_B, T_C, UTC
 
 import catalog_inputs
 import products_api
@@ -22,8 +22,8 @@ def cat(settings):
     products_api.configure(None)
 
 
-def test_calibration_days(cat):
-    assert catalog_inputs.calibration_days(cat) == [CAL_DATE]  # all four loads start that day
+def test_full_s11_sessions(cat):
+    assert catalog_inputs.full_s11_sessions(cat) == [S11_OLD, S11_GOOD]
 
 
 def test_probe_temperature(cat):

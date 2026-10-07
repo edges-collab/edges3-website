@@ -14,7 +14,7 @@ import os
 from conftest import S11_GOOD, rcal_arrays
 
 
-def calibrate_day(day, params=None, deployment="edges3-mro", settings=None):
+def calibrate_day(day, params=None, deployment="edges3-mro", settings=None, s11_session=None):
     from astropy import units as un
     from edges.cal import Calibrator
     from edges_pipeline.products import _cal_day_key, rcal_info
@@ -37,7 +37,7 @@ def calibrate_day(day, params=None, deployment="edges3-mro", settings=None):
     )
     metrics = {"method": "edges.cal", "t_load": 300.0, "t_load_ns": 1000.0,
                "issues": [], "n_readings": {"ambient": 7, "hot": 7}, "spectra": {}}
-    row = {"deployment": deployment, "cal_day": key, "s11_session": S11_GOOD,
+    row = {"deployment": deployment, "cal_day": key, "s11_session": s11_session or S11_GOOD,
            "t_ambient_k": 300.15, "t_hot_k": 384.15, "rms_ambient_k": 0.0, "rms_hot_k": 0.1,
            "rms_open_k": 0.2, "rms_short_k": 0.3, "path": None,
            "config_hash": rcal.config_hash(params)}
