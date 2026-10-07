@@ -39,13 +39,22 @@ export type QuickLook = {
   lst_hour?: (number | null)[]
   freq_mhz?: (number | null)[]
   freq_edges_mhz?: (number | null)[]
+  /** Q, each 0.5 MHz bin the ``waterfall_stat`` of its channels */
   waterfall_q?: EncodedArray | null
+  waterfall_stat?: WaterfallStat
+  /** why the requested statistic is not the one shown */
+  waterfall_note?: string | null
+  /** the mean/max waterfalls (which keep RFI) exist; null: not checked */
+  rfi_waterfalls?: boolean | null
   waterfall_p0?: EncodedArray | null
   decimation?: number
   files?: string[]
   missing_files?: string[]
   coverage?: Coverage
 }
+
+/** How a QL bin combines its ~80 channels: the median hides narrowband RFI. */
+export type WaterfallStat = "median" | "mean" | "max"
 
 export type BandSeries = {
   time_unix: (number | null)[]

@@ -9,7 +9,7 @@ import sys
 
 import numpy as np
 import pytest
-from conftest import CYCLE_S, NIGHT, T_A, T_B, T_BAD, T_C, T_DAY
+from conftest import CYCLE_S, NFREQ, NIGHT, RFI_CHANNEL, T_A, T_B, T_BAD, T_C, T_DAY
 
 import products_api
 
@@ -137,6 +137,51 @@ def test_night_p0_and_cache(client):
     assert p0.shape == _decode(d["quicklook"]["waterfall_q"]).shape
     again = client.get("/api/night", params={"p0": "true"}).json()
     assert again["generated_at"] == d["generated_at"]  # served from the cache
+
+
+def _rfi_bin(ql):
+    """Rows of file C and the column of the RFI line's bin."""
+    f = np.asarray(ql["freq_edges_mhz"])
+    col = int(np.searchsorted(f, RFI_CHANNEL * 200 / NFREQ, side="right") - 1)
+    t = np.asarray([np.nan if v is None else v for v in ql["time_unix"]])
+    rows = (t >= T_C.timestamp()) & (t < T_C.timestamp() + 10 * CYCLE_S)
+    return rows, col
+
+
+def test_night_waterfalls_that_keep_rfi(client):
+    out = {}
+    for stat in ("median", "mean", "max"):
+        ql = client.get("/api/night", params={"waterfall": stat}).json()["quicklook"]
+        assert ql["waterfall_stat"] == stat and ql["rfi_waterfalls"] is True
+        assert ql["waterfall_note"] is None
+        rows, col = _rfi_bin(ql)
+        out[stat] = np.nanmedian(_decode(ql["waterfall_q"])[rows, col])
+    # Q = 19 in one of the bin's 3 channels, ~0.5 in the others
+    assert out["median"] < 1 and 5 < out["mean"] < 8 and out["max"] > 15
+
+
+def test_waterfalls_before_ql_version_3(client, monkeypatch):
+    """Older products have no mean/max: the median, said so."""
+    prod = products_api.get_products()
+    real = prod.quicklook
+
+    def old(*a, quantities=("waterfall_q",), **k):
+        if any(q in ("waterfall_q_mean", "waterfall_q_max") for q in quantities):
+            raise KeyError("waterfall_q_max")
+        return real(*a, quantities=quantities, **k)
+
+    monkeypatch.setattr(prod, "quicklook", old)
+    products_api._cache.clear()
+    ql = client.get("/api/night", params={"waterfall": "max"}).json()["quicklook"]
+    assert ql["available"] and ql["waterfall_stat"] == "median"
+    assert ql["rfi_waterfalls"] is False and "QL version 3" in ql["waterfall_note"]
+    ql = client.get("/api/night").json()["quicklook"]
+    assert ql["rfi_waterfalls"] is False and ql["waterfall_note"] is None
+    products_api._cache.clear()
+
+
+def test_unknown_waterfall_statistic(client):
+    assert client.get("/api/night", params={"waterfall": "mode"}).status_code == 422
 
 
 def test_night_by_date_outside_coverage(client):

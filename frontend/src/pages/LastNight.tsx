@@ -3,21 +3,35 @@
  * the precomputed quick-look and L1 products (`GET /api/night`). The
  * `?date=YYYY-MM-DD` query parameter selects another night (named by the
  * local date of its evening); previous/next step through nights.
+ *
+ * The Q waterfall comes binned three ways (0.5 MHz bins of ~80 channels):
+ * the median hides narrowband RFI, the mean and the max keep it (the max
+ * best, but biased ~0.014 high by noise, hence "minus channel median").
  */
 import { useEffect, useState } from "react"
 import { useSearchParams } from "react-router"
 import { BASE_URL } from "../utils/baseURL"
-import type { NightPayload } from "../types/night"
+import type { NightPayload, WaterfallStat } from "../types/night"
 import { shiftDate, toSiteTime } from "../utils/nightData"
 import NightFigure from "../components/NightFigure"
 import FileQATable from "../components/FileQATable"
 
 type Quantity = "q" | "p0"
+type View = WaterfallStat | "p0"
+
+const VIEWS: [View, string, string][] = [
+  ["median", "Q, RFI removed", "Median of each bin's ~80 channels: hides narrowband RFI"],
+  ["mean", "Q mean, RFI kept", "Mean of each bin's channels: RFI shows, diluted ~80×"],
+  ["max", "Q max, RFI kept", "Max of each bin's channels: shows RFI best (biased ~0.014 high by noise)"],
+  ["p0", "p0 (log)", "Antenna power, log scale"],
+]
 
 export default function LastNight() {
   const [params, setParams] = useSearchParams()
   const date = params.get("date")
-  const [quantity, setQuantity] = useState<Quantity>("q")
+  const [view, setView] = useState<View>("median")
+  const [relative, setRelative] = useState(false)
+  const quantity: Quantity = view === "p0" ? "p0" : "q"
   // The payload and the `date` it was requested for, so a previous night is
   // never shown under a new URL while it loads (or after an error).
   const [loaded, setLoaded] = useState<{ date: string | null; payload: NightPayload } | null>(null)
@@ -29,7 +43,8 @@ export default function LastNight() {
     const ctrl = new AbortController()
     const q = new URLSearchParams()
     if (date) q.set("date", date)
-    if (quantity === "p0") q.set("p0", "true")
+    if (view === "p0") q.set("p0", "true")
+    else if (view !== "median") q.set("waterfall", view)
     setLoading(true)
     setError(null)
     fetch(`${BASE_URL}/api/night?${q}`, { signal: ctrl.signal })
@@ -53,14 +68,20 @@ export default function LastNight() {
         if (!ctrl.signal.aborted) setLoading(false)
       })
     return () => ctrl.abort()
-  }, [date, quantity])
+  }, [date, view])
 
   const data = loaded && loaded.date === date ? loaded.payload : null
   const night = data?.night
   const go = (d: string | null) => setParams(d ? { date: d } : {})
   const canNext = night && night.latest_date !== null && night.date < night.latest_date
-  // Switching to p0 refetches; keep showing Q until the p0 waterfall arrives.
+  // Switching refetches; keep showing what is loaded until the new one arrives.
   const shown: Quantity = quantity === "p0" && !data?.quicklook.waterfall_p0 ? "q" : quantity
+  const stat = data?.quicklook.waterfall_stat ?? "median"
+  const rfiOk = data?.quicklook.rfi_waterfalls !== false
+  const choose = (v: View) => {
+    setView(v)
+    if (v === "max") setRelative(true) // its noise bias is the same in every channel
+  }
   const commitPick = () => {
     if (/^(19|20)\d\d-\d\d-\d\d$/.test(pick) && pick !== (night?.date ?? date)) go(pick)
   }
@@ -93,13 +114,20 @@ export default function LastNight() {
           onBlur={commitPick}
           onKeyDown={(e) => { if (e.key === "Enter") commitPick() }} />
         <div className="btn-group btn-group-sm" role="group" aria-label="Waterfall quantity">
-          {(["q", "p0"] as const).map((k) => (
-            <button key={k} className={`btn ${quantity === k ? "btn-primary" : "btn-outline-primary"}`}
-              onClick={() => setQuantity(k)}>
-              {k === "q" ? "Q" : "p0 (log)"}
+          {VIEWS.map(([k, label, help]) => (
+            <button key={k} className={`btn ${view === k ? "btn-primary" : "btn-outline-primary"}`}
+              disabled={(k === "mean" || k === "max") && !rfiOk}
+              title={(k === "mean" || k === "max") && !rfiOk ? "Needs QL version 3 products" : help}
+              onClick={() => choose(k)}>
+              {label}
             </button>
           ))}
         </div>
+        <label className="form-check form-check-inline small m-0">
+          <input type="checkbox" className="form-check-input" checked={relative}
+            onChange={(e) => setRelative(e.target.checked)} />
+          <span className="form-check-label">minus each channel's median</span>
+        </label>
         {loading && <span className="spinner-border spinner-border-sm text-primary" role="status" />}
       </div>
 
@@ -134,14 +162,20 @@ export default function LastNight() {
             </div>
           )}
           <div className="border rounded p-2">
-            <NightFigure data={data} quantity={shown} />
+            {data.quicklook.waterfall_note && (
+              <div className="alert alert-secondary py-1 small mb-1">{data.quicklook.waterfall_note}</div>
+            )}
+            <NightFigure data={data} quantity={shown} relative={relative} />
             <p className="text-muted small mb-0 px-2">
               Uncalibrated quick-look products. Waterfall: {data.quicklook.n_rows} rows
               {data.quicklook.decimation && data.quicklook.decimation > 1
                 ? ` (up to ${data.quicklook.decimation} cycles averaged per row, never across a gap)` : " (one per cycle)"}
               {" "}from {data.quicklook.files?.length ?? 0} files
               {data.quicklook.missing_files?.length ? `; unreadable: ${data.quicklook.missing_files.join(", ")}` : ""}.
-              Blank columns and broken lines are gaps in the data.
+              {shown === "q" && (stat === "median"
+                ? " Each 0.5 MHz bin is the median of its ~80 channels, which hides narrowband RFI (choose mean or max to keep it)."
+                : ` Each 0.5 MHz bin is the ${stat} of its ~80 channels, which keeps narrowband RFI${stat === "max" ? " (and sits ~0.014 above the median everywhere: noise)" : " (diluted ~80×)"}.`)}
+              {" "}Blank columns and broken lines are gaps in the data.
             </p>
           </div>
           <div className="border rounded p-3">
