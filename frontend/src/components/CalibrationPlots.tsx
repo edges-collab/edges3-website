@@ -3,8 +3,9 @@
  * the calibrated load temperatures against the known ones (residuals by
  * default), the noise-wave parameters, the modelled S11 of the loads and the
  * receiver, the hot-load loss, and (rcal v3+) each load's mean Q spectrum and
- * the receiver temperature during it, with each load's band-median Q per
- * cycle over time (L1). Optionally a second stored configuration
+ * the receiver temperature during it, (rcal v4+) the mean R of the four
+ * loads, which should agree (a difference is receiver gain drift), and each
+ * load's band-median Q per cycle over time (L1). Optionally a second stored configuration
  * of the same day is overlaid (e.g. the old Alan-mode products). Arrays come
  * at full resolution (3072 channels) and are thinned for plotting only.
  */
@@ -126,6 +127,22 @@ export default function CalibrationPlots({ data, compare }: Props) {
       traces: [trace(f, y)], yRange: robustRange([y], f, band, 0.01, 0.99),
     }
   })
+  // mean R = P_L / (P_LNS − P_L) of each load (rcal v4+): the receiver's own
+  // ratio, so the four should agree; shown with each load's difference from
+  // the ambient load's
+  const rLoads = LOADS.filter(([k]) => data.loads[k]?.r)
+  const rAmb = data.loads.ambient?.r ? nums(data.loads.ambient.r) : null
+  const R_COLORS = [...SERIES, MUTED]
+  const rPanels: Panel[] = rLoads.length === 0 ? [] : [
+    { title: "Mean R = P_L / (P_LNS − P_L)", traces: rLoads.map(([k, name], i) =>
+      trace(f, nums(data.loads[k].r), { name, color: R_COLORS[i] })) },
+    ...(rAmb ? [{
+      title: "R − R(ambient load): receiver gain drift between the spectra", traces: rLoads.slice(1).map(([k, name], i) => {
+        const r = nums(data.loads[k].r)
+        return trace(f, r.map((v, j) => v - rAmb[j]), { name, color: R_COLORS[i + 1] })
+      }),
+    }] : []),
+  ]
   const feMeans = LOADS.map(([k]) => fe(k)?.mean).filter((v): v is number => v !== undefined)
   const feSpread = feMeans.length > 1 ? Math.max(...feMeans) - Math.min(...feMeans) : 0
 
@@ -201,7 +218,10 @@ export default function CalibrationPlots({ data, compare }: Props) {
           <h3 className="h6">Calibration spectra</h3>
           <p className="small text-muted mb-1">
             Each load's mean Q, exactly as used in the fit, and the receiver (front-end) temperature
-            during its spectrum.
+            during its spectrum. Below, the mean R = P_L / (P_LNS − P_L) of the three-position switch
+            (rcal version 4 and later): it depends on the receiver's internal load and noise source,
+            not the input, so the four loads should agree; a difference means the receiver's gain
+            drifted between their spectra.
           </p>
           {feSpread > FRONTEND_SPREAD_C && (
             <div className="alert alert-warning py-1 px-2 small mb-1">
@@ -211,6 +231,9 @@ export default function CalibrationPlots({ data, compare }: Props) {
             </div>
           )}
           <StackedPlot panels={qPanels} panelHeight={110} xRange={band} />
+          {rPanels.length > 0 && (
+            <StackedPlot panels={rPanels} panelHeight={140} xRange={band} />
+          )}
         </section>
       )}
 

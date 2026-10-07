@@ -131,6 +131,8 @@ def test_stored_calibration(client):
     # rcal v3: each load's mean Q (7 significant digits) and receiver temperature
     assert d["loads"]["ambient"]["q"][0] == pytest.approx(0.0005, rel=1e-6)
     assert d["loads"]["open"]["frontend_c"] == {"mean": 27.0, "min": 26.5, "max": 27.5}
+    # rcal v4: each load's mean R = PL / (PLNS - PL)
+    assert d["loads"]["short"]["r"][0] == pytest.approx(0.7247, rel=1e-6)
     assert d["issues"] and d["config"]["fit"]["cterms"] == 6
     assert (d["t_load"], d["t_load_ns"]) == (300.0, 1000.0)
     assert c.get("/api/calibrations/stored/2025:102").json() == d

@@ -165,6 +165,7 @@ def rcal_arrays(offset: float = 0.0, alan_mode: bool = False) -> dict:
             out[f"s11_{name}_imag"] = np.full_like(f, -0.05)
             out[f"q_{name}"] = np.full_like(f, 0.0005 + 0.25 * i)
             out[f"q_variance_{name}"] = np.full_like(f, 1e-6)
+            out[f"r_{name}"] = np.full_like(f, 0.7268 - 0.0007 * i)
     if alan_mode:
         out["hot_load_loss"] = np.stack([f, np.full_like(f, 0.98)], axis=1)
     return out

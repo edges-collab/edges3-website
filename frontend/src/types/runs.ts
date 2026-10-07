@@ -63,6 +63,8 @@ export type CalibrationData = {
     /** rcal v3+: the mean Q spectrum used in the fit, its per-cycle variance */
     q: Arr | null
     q_variance: Arr | null
+    /** rcal v4+: the mean R = P_L / (P_LNS − P_L): the receiver's, not the load's */
+    r?: Arr | null
     /** rcal v3+: receiver (front-end) temperature during the spectrum, °C */
     frontend_c: { mean: number; min: number; max: number } | null
   }>

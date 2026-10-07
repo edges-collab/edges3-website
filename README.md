@@ -224,7 +224,8 @@ Four tabs:
   four loads (calibrated − known, or the values), the noise-wave
   parameters, the modelled S11s of the loads and the receiver, the hot-load
   loss, each load's mean Q spectrum with the receiver temperature during it
-  (flagged when it differs between the loads by more than 2 °C), each
+  (flagged when it differs between the loads by more than 2 °C), the loads'
+  mean R = P_L/(P_LNS − P_L) and their differences (gain drift), each
   load's band-median Q per cycle over time (from L1, flagged cycles in red),
   the issues, and its settings and configuration hash. Days without a
   calibration are listed with the pipeline's reason
