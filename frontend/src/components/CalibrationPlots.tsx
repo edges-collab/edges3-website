@@ -221,9 +221,10 @@ export default function CalibrationPlots({ data, compare }: Props) {
             during its spectrum. Below, the mean R = P_L / (P_LNS − P_L) of the three-position switch
             (rcal version 4 and later): it depends on the receiver's internal load and noise source,
             not the input, so the four loads should agree; a difference means the receiver's gain
-            drifted between their spectra. R rises below ~49 MHz (to ~1.25 at 40 MHz) on every
-            day: the noise source's excess power falls there (normal for this receiver). The
-            calibration's deflection is smaller below ~45 MHz, so Q is noisier there.
+            drifted between their spectra. R rises below ~50 MHz (to ~1.25 at 40 MHz), the same
+            for all four loads and on every day since 2022: a known effect of an out-of-band noise
+            source, which the R − R(ambient) panel removes. The calibration's deflection is
+            smaller below ~45 MHz, so Q is noisier there.
           </p>
           {feSpread > FRONTEND_SPREAD_C && (
             <div className="alert alert-warning py-1 px-2 small mb-1">
