@@ -24,6 +24,7 @@ type Props = {
   height?: number
   /** keeps the user's zoom while this stays the same */
   revision: string
+  barmode?: "group" | "stack" | "overlay"
   onXRange?: (r: [number, number] | null) => void
   onPick?: (customdata: unknown) => void
 }
@@ -35,7 +36,7 @@ export const utc = (t: number | null): string | null =>
 /** A Plotly date string (UTC, no zone) -> POSIX seconds. */
 const toUnix = (s: unknown): number => Date.parse(`${String(s).replace(" ", "T")}${String(s).length <= 10 ? "" : "Z"}`) / 1000
 
-export default function TimeStrips({ strips, height = 600, revision, onXRange, onPick }: Props) {
+export default function TimeStrips({ strips, height = 600, revision, barmode, onXRange, onPick }: Props) {
   const { data, layout } = useMemo(() => {
     const gap = 0.04
     const total = strips.reduce((s, x) => s + (x.weight ?? 1), 0)
@@ -51,6 +52,7 @@ export default function TimeStrips({ strips, height = 600, revision, onXRange, o
       paper_bgcolor: "#fcfcfb",
       font: { size: 11, color: "#0b0b0b" },
       uirevision: revision,
+      barmode,
       xaxis: { type: "date", gridcolor: GRID, title: { text: "UTC" }, anchor: `y${strips.length > 1 ? strips.length : ""}` },
     }
     const out: Data[] = []
@@ -72,7 +74,7 @@ export default function TimeStrips({ strips, height = 600, revision, onXRange, o
       for (const t of s.traces) out.push({ ...t, xaxis: "x", yaxis: ax } as Data)
     })
     return { data: out, layout: L as Partial<Layout> }
-  }, [strips, height, revision])
+  }, [strips, height, revision, barmode])
 
   return (
     <Plot

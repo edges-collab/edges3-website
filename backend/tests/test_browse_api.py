@@ -21,6 +21,7 @@ def client(settings, monkeypatch):
     from fastapi.testclient import TestClient
 
     monkeypatch.setattr(browse_api, "DEPLOYMENTS", {DEP: "EDGES-3 (test)"})
+    monkeypatch.setattr(browse_api, "HK_SOURCE", {DEP: "templog"})
     products_api.configure(settings)
     app = FastAPI()
     app.include_router(browse_api.router)
@@ -39,9 +40,12 @@ def test_overview(client):
     # A, B, C, bad, day and the four calibration loads (bad was extracted
     # before it was garbled)
     assert s["n_files"] == 9 and s["n_extracted"] == 9
-    assert s["n_s11_sessions"] == 0  # the synthetic sessions are stamped to the hour, not the second
+    assert s["n_calibration_files"] == 4 and s["has_housekeeping"]
+    assert s["n_s11_sessions"] == 2  # the catalog's averaged sessions (2025_101_05, 2025_102_02)
     i = d["days"].index(NIGHT)
     assert d["files"][i] == 4  # A, B, C and bad start on 2025-04-10 (UTC)
+    j = d["days"].index("2025-04-12")  # the calibration day: four loads, 4 cycles each
+    assert d["cal_files"][j] == 4 and d["files"][j] in (0, None) and d["cal_hours"][j] > 0
     assert d["cycles"][i] == pytest.approx(100)  # A 40, B 40, C 10, bad 10
     assert d["hours"][i] == pytest.approx(100 * CYCLE_S / 3600, rel=0.05)
     assert d["days"] == sorted(d["days"]) and len(set(d["days"])) == len(d["days"])
@@ -82,3 +86,21 @@ def test_bad_requests(client, path, params, code):
 def test_weather_absent(client):
     w = client.get(f"/api/browse/{DEP}/weather", params={"start": NIGHT, "end": "2025-04-11"}).json()
     assert w["available"] is False and w["reason"]
+
+
+def test_s11_sessions_and_housekeeping(client):
+    r = client.get(f"/api/browse/{DEP}/range", params={"start": "2025-04-11", "end": "2025-04-13"}).json()
+    sessions = {x["name"]: x for x in r["s11_sessions"]}
+    assert set(sessions) == {"2025_101_05", "2025_102_02"}
+    full = sessions["2025_102_02"]
+    assert full["session_id"] and full["kind"] == "full" and "ant" in full["labels"]
+    s = client.get(f"/api/browse/{DEP}/s11", params={"session_id": full["session_id"]}).json()
+    assert set(s["traces"]) == set(full["labels"])  # each file read (or its error said)
+    assert client.get(f"/api/browse/{DEP}/s11", params={"session_id": 999999}).status_code == 404
+    assert client.get(f"/api/browse/{DEP}/s11").status_code == 400
+    loads = {f["load"] for f in r["files"]}
+    assert {"amb", "hot", "open", "short"} <= loads
+    hk = client.get(f"/api/browse/{DEP}/housekeeping", params={"start": "2025-04-12", "end": "2025-04-13"}).json()
+    assert hk["available"] and hk["source"] == "templog"
+    assert hk["series"]["hot_load_temperature"]["value"][0] == pytest.approx(111.0)
+    assert hk["series"]["hot_load_temperature"]["unit"]

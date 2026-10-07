@@ -1,13 +1,15 @@
 /**
- * Raw data (first EDGES-2 low2): a receiver's whole record at a glance, then
- * any range of up to two months in detail, from the catalog only.
+ * Raw data (EDGES-3, EDGES-2 low2): a receiver's whole record at a glance,
+ * then any range of up to two months in detail, from the catalog only.
  *
- * - Overview, per UTC day over the whole record: hours of data (spectrum
- *   files before extraction), GB, S11 sessions, data drops and the largest
- *   ADC value. Zoom in to two months or less, or click a day, to open it.
- * - The range: each spectrum file's span, the S11 sessions, and the site's
- *   weather; a file table (click a file for its cycles) and the S11 sessions
- *   (click one for its raw |S11| and phase).
+ * - Overview, per UTC day over the whole record: hours of antenna data (and
+ *   of calibration loads; spectrum files before extraction), GB, S11
+ *   sessions, data drops and the largest ADC value. Zoom in to two months or
+ *   less, or click a day, to open it.
+ * - The range: each spectrum file's span (by load), the S11 sessions, the
+ *   receiver's own housekeeping and the site's weather; a file table (click
+ *   a file for its cycles) and the S11 sessions (click one for its raw
+ *   |S11| and phase).
  *
  * URL: ``/raw?dep=<deployment>&start=YYYY-MM-DD&end=YYYY-MM-DD``.
  */
@@ -18,11 +20,19 @@ import TimeStrips, { utc, type Strip } from "../components/TimeStrips"
 import StackedPlot, { MUTED, SERIES, type Panel } from "../components/StackedPlot"
 import { useJson } from "../hooks/useJson"
 import { magPhase } from "../utils/robust"
-import type { BrowseFile, Cycles, Deployment, Overview, RangeData, S11Traces, Weather } from "../types/browse"
+import { Link } from "react-router"
+import type {
+  BrowseFile, Cycles, Deployment, Housekeeping, Overview, RangeData, S11Session, S11Traces, Weather,
+} from "../types/browse"
 
 const CRITICAL = "#d03b3b"
 const MAX_RANGE_DAYS = 62
-const DEFAULT_DEPLOYMENT = "edges2-low2-mro"
+const DEFAULT_DEPLOYMENT = "edges3-mro"
+/** Housekeeping not plotted (not temperatures or voltages one reads by eye). */
+const HK_SKIP = new Set(["pr59_current", "setpoint", "thermal_control"])
+/** "front_end_temperature" -> "front end"; "sensors_frontend_low3_temperature" -> "frontend low3"
+ * (EDGES-2 sensor files name the front end they claim to measure). */
+const pretty = (k: string) => k.replace(/^sensors_/, "").replace(/_temperature$/, "").replace(/_/g, " ")
 const DAY = 86400
 
 const ymd = (t: number) => new Date(t * 1000).toISOString().slice(0, 10)
@@ -55,12 +65,16 @@ export default function Browse() {
       type: "bar", x: ov.days, y: nums(y), name, marker: { color }, customdata: ov.days,
       hovertemplate: `%{x}<br>${name}: %{y}<extra></extra>`, showlegend: false,
     })
+    const cal = (s?.n_calibration_files ?? 0) > 0
+    const stacked = (a: Partial<Data>, b: Partial<Data>) => (cal ? [a, { ...b, showlegend: true }] : [a])
     const out: Strip[] = [
       extracted
-        ? { title: "hours", traces: [bar(ov.hours, "hours of data")], weight: 1.4 }
-        : { title: "files", traces: [bar(ov.files, "spectrum files")], weight: 1.4 },
+        ? { title: "hours", traces: stacked({ ...bar(ov.hours, "antenna"), showlegend: cal },
+            bar(ov.cal_hours, "calibration loads", SERIES[1])), weight: 1.4 }
+        : { title: "files", traces: stacked({ ...bar(ov.files, "antenna files"), showlegend: cal },
+            bar(ov.cal_files, "calibration-load files", SERIES[1])), weight: 1.4 },
       { title: "GB", traces: [bar(ov.gb, "GB of spectra", SERIES[2])] },
-      { title: "S11", traces: [bar(ov.s11_sessions, "S11 sessions", SERIES[1])] },
+      { title: "S11", traces: [bar(ov.s11_sessions, "S11 sessions", MUTED)] },
     ]
     if (extracted) {
       out.push({ title: "drops", traces: [bar(ov.drops, "data drops", CRITICAL)] })
@@ -70,7 +84,7 @@ export default function Browse() {
       }] })
     }
     return out
-  }, [ov, extracted])
+  }, [ov, extracted, s])
 
   const zoomDays = zoom ? (zoom[1] - zoom[0]) / DAY : null
 
@@ -113,7 +127,7 @@ export default function Browse() {
         </div>
         {!ov ? <div className="text-muted small p-3">Loading the record…</div>
           : overviewStrips.length === 0 ? <div className="text-muted small p-3">No data for this receiver.</div>
-            : <TimeStrips strips={overviewStrips} height={extracted ? 520 : 380} revision={dep}
+            : <TimeStrips strips={overviewStrips} height={extracted ? 520 : 380} revision={dep} barmode="stack"
                 onXRange={setZoom}
                 onPick={(d) => { const t = unixOf(String(d)); open(t - 3 * DAY, t + 4 * DAY) }} />}
       </section>
@@ -130,8 +144,10 @@ function RangeView({ dep, start, end, onRange }: {
   const qs = `start=${start}&end=${end}`
   const { data: r, error } = useJson<RangeData>(`/api/browse/${dep}/range?${qs}`)
   const { data: w } = useJson<Weather>(`/api/browse/${dep}/weather?${qs}`)
+  const { data: hk } = useJson<Housekeeping>(`/api/browse/${dep}/housekeeping?${qs}`)
   const [fileId, setFileId] = useState<number | null>(null)
-  const [stamp, setStamp] = useState<number | null>(null)
+  const [session, setSession] = useState<S11Session | null>(null)
+  const pick = (stamp: number) => setSession(r?.s11_sessions.find((x) => x.stamp_unix === stamp) ?? null)
   const span = t1 - t0
 
   const strips: Strip[] = useMemo(() => {
@@ -144,11 +160,15 @@ function RangeView({ dep, start, end, onRange }: {
       text: fs.flatMap((f) => [f.name, f.name, ""]),
     })
     const ext = r.files.filter((f) => f.t_start_unix !== null && f.t_end_unix !== null)
-    const ok = ext.filter((f) => !f.data_drops), bad = ext.filter((f) => !!f.data_drops)
+    const isAnt = (f: BrowseFile) => !f.load || f.load === "ant"
+    const ok = ext.filter((f) => !f.data_drops && isAnt(f)), bad = ext.filter((f) => !!f.data_drops)
+    const calOk = ext.filter((f) => !f.data_drops && !isAnt(f))
     const pending = r.files.filter((f) => f.t_start_unix === null)
     const files: Partial<Data>[] = [
-      { type: "scatter", mode: "lines", ...seg(ok), name: "spectrum file", line: { color: SERIES[0], width: 12 },
+      { type: "scatter", mode: "lines", ...seg(ok), name: "antenna file", line: { color: SERIES[0], width: 12 },
         hovertemplate: "%{text}<extra></extra>" },
+      ...(calOk.length ? [{ type: "scatter" as const, mode: "lines" as const, ...seg(calOk), name: "calibration-load file",
+        line: { color: SERIES[1], width: 12 }, hovertemplate: "%{text}<extra></extra>" }] : []),
       { type: "scatter", mode: "lines", ...seg(bad), name: "file with data drops", line: { color: CRITICAL, width: 12 },
         hovertemplate: "%{text}<extra></extra>" },
       { type: "scatter", mode: "markers", x: pending.map((f) => utc(f.stamp_unix)), y: pending.map(() => 0),
@@ -159,13 +179,28 @@ function RangeView({ dep, start, end, onRange }: {
     const s11: Partial<Data>[] = [{
       type: "scatter", mode: "markers", x: r.s11_sessions.map((x) => utc(x.stamp_unix)), y: r.s11_sessions.map(() => 0),
       customdata: r.s11_sessions.map((x) => `s11:${x.stamp_unix}`), text: r.s11_sessions.map((x) => x.name),
-      name: "S11 session (click)", marker: { color: SERIES[1], symbol: "diamond", size: 9 },
+      name: "S11 session (click)", marker: { color: MUTED, symbol: "diamond", size: 9 },
       hovertemplate: "S11 %{text}<extra></extra>",
     }]
     const out: Strip[] = [
       { title: "files", traces: files, weight: 0.5, events: true },
       { title: "S11", traces: s11, weight: 0.4, events: true },
     ]
+    // the receiver's own log, one strip per unit (the hot load apart: ~100 °C)
+    if (hk?.available && hk.series) {
+      const groups = new Map<string, [string, (typeof hk.series)[string]][]>()
+      for (const [k, v] of Object.entries(hk.series)) {
+        if (HK_SKIP.has(k)) continue
+        const g = k.startsWith("hot_load") ? `hot load [${v.unit}]` : `receiver log [${v.unit || "?"}]`
+        groups.set(g, [...(groups.get(g) ?? []), [k, v]])
+      }
+      for (const [title, items] of groups) {
+        out.push({ title, weight: 0.8, traces: items.map(([k, v], i) => ({
+          type: "scatter", mode: "lines", x: v.time_unix.map(utc), y: nums(v.value), name: pretty(k),
+          line: { color: [SERIES[0], SERIES[1], SERIES[2], MUTED][i % 4], width: 1 },
+        })) })
+      }
+    }
     if (w?.available && w.series && w.time_unix) {
       const x = w.time_unix.map(utc)
       const line = (k: string, name: string, color: string): Partial<Data> => ({
@@ -174,11 +209,11 @@ function RangeView({ dep, start, end, onRange }: {
       const temps = [["ambient_temp", "ambient", SERIES[0]], ["rack_temp", "rack", SERIES[1]],
         ["frontend", "front end (receiver not recorded)", MUTED]] as const
       const t = temps.filter(([k]) => w.series![k]).map(([k, n, c]) => line(k, n, c))
-      if (t.length) out.push({ title: "temperature [K]", traces: t })
-      if (w.series.ambient_hum) out.push({ title: "humidity [%]", traces: [line("ambient_hum", "humidity", SERIES[2])], weight: 0.7 })
+      if (t.length) out.push({ title: "site weather [K]", traces: t })
+      if (w.series.ambient_hum) out.push({ title: "humidity [%]", traces: [line("ambient_hum", "humidity", SERIES[2])], weight: 0.6 })
     }
     return out
-  }, [r, w])
+  }, [r, w, hk])
 
   return (
     <>
@@ -190,18 +225,21 @@ function RangeView({ dep, start, end, onRange }: {
             <button className="btn btn-outline-primary" onClick={() => onRange(t1, t1 + span)}>Later →</button>
           </div>
           {r && <span className="small text-muted">{r.files.length} spectrum files, {r.s11_sessions.length} S11 sessions
-            {w && !w.available ? `; weather: ${w.reason}` : ""}</span>}
+            {w && !w.available ? `; weather: ${w.reason}` : ""}{hk && !hk.available ? `; housekeeping: ${hk.reason}` : ""}</span>}
+          {dep === "edges3-mro" && (
+            <Link className="small ms-auto" to={`/?date=${start}`}>The night of {start} in the Nightly Overview →</Link>
+          )}
         </div>
         {error && <div className="alert alert-warning small py-1">{error}</div>}
         {!r ? <div className="text-muted small p-3">Loading…</div>
-          : <TimeStrips strips={strips} height={strips.length > 2 ? 560 : 260} revision={`${start}/${end}`}
+          : <TimeStrips strips={strips} height={180 + 110 * strips.length} revision={`${start}/${end}`}
               onPick={(c) => {
-                if (typeof c === "string" && c.startsWith("s11:")) setStamp(Number(c.slice(4)))
+                if (typeof c === "string" && c.startsWith("s11:")) pick(Number(c.slice(4)))
                 else if (typeof c === "number") setFileId(c)
               }} />}
         <p className="small text-muted mb-0 px-2">
-          Weather: the site's log (Catalog.weather). Its front-end temperature is not attributed to a receiver yet
-          (edges-database is asking the team whose it is).
+          Receiver: its own housekeeping log ({hk?.source ?? "none"}). Site weather: the MRO weather log; its
+          front-end temperature is not attributed to a receiver yet (edges-database is asking the team whose it is).
         </p>
       </section>
 
@@ -211,7 +249,7 @@ function RangeView({ dep, start, end, onRange }: {
           <div style={{ maxHeight: 320, overflow: "auto" }}>
             <table className="table table-sm table-hover small mb-0">
               <thead className="sticky-top bg-white">
-                <tr><th>File</th><th>Start (UTC)</th><th className="text-end">Hours</th><th className="text-end">Cycles</th>
+                <tr><th>File</th><th>Load</th><th>Start (UTC)</th><th className="text-end">Hours</th><th className="text-end">Cycles</th>
                   <th className="text-end">Data drops</th><th className="text-end">ADC max / min</th><th className="text-end">MB</th></tr>
               </thead>
               <tbody>
@@ -219,6 +257,7 @@ function RangeView({ dep, start, end, onRange }: {
                   <tr key={f.file_id} className={f.file_id === fileId ? "table-primary" : ""} style={{ cursor: "pointer" }}
                     onClick={() => setFileId(f.file_id)}>
                     <td className="font-monospace">{f.name}{f.category !== "science" && <span className="badge text-bg-secondary ms-1">{f.category}</span>}</td>
+                    <td>{f.load ?? "–"}</td>
                     <td>{utc(f.t_start_unix ?? f.stamp_unix)}{f.t_start_unix === null && <span className="text-muted"> (name)</span>}</td>
                     <td className="text-end">{fmt(f.duration_hr)}</td>
                     <td className="text-end">{f.n_cycles ?? "–"}</td>
@@ -239,11 +278,13 @@ function RangeView({ dep, start, end, onRange }: {
           <h3 className="h6">S11 sessions</h3>
           <div className="d-flex flex-wrap gap-1 mb-2">
             {r.s11_sessions.map((x) => (
-              <button key={x.stamp_unix} className={`btn btn-sm ${x.stamp_unix === stamp ? "btn-primary" : "btn-outline-secondary"}`}
-                onClick={() => setStamp(x.stamp_unix)}>{x.name}</button>
+              <button key={x.stamp_unix} className={`btn btn-sm ${x.stamp_unix === session?.stamp_unix ? "btn-primary" : "btn-outline-secondary"}`}
+                title={`${x.kind}: ${x.labels.join(", ")}`} onClick={() => setSession(x)}>
+                {x.name}{x.kind !== "antenna" ? ` (${x.kind})` : ""}
+              </button>
             ))}
           </div>
-          {stamp !== null ? <S11View dep={dep} stamp={stamp} />
+          {session !== null ? <S11View dep={dep} session={session} />
             : <div className="small text-muted">Choose a session (or click one in the figure above).</div>}
         </section>
       )}
@@ -275,22 +316,27 @@ function CyclesView({ dep, fileId }: { dep: string; fileId: number }) {
   )
 }
 
-function S11View({ dep, stamp }: { dep: string; stamp: number }) {
-  const { data: s, error } = useJson<S11Traces>(`/api/browse/${dep}/s11?stamp=${stamp}`)
+function S11View({ dep, session }: { dep: string; session: S11Session }) {
+  const stamp = session.stamp_unix
+  const { data: s, error } = useJson<S11Traces>(`/api/browse/${dep}/s11?${
+    session.session_id !== null ? `session_id=${session.session_id}` : `stamp=${stamp}`}`)
   if (error) return <div className="text-danger small">{error}</div>
   if (!s) return <div className="text-muted small">Reading the session…</div>
-  const colors: Record<string, string> = { antenna_s11: SERIES[0], input1: SERIES[1], input2: SERIES[2], input3: MUTED, input4: CRITICAL }
+  // the antenna in the first colour; the rest (VNA inputs, standards, loads) cycle
+  const others = [SERIES[1], SERIES[2], MUTED, CRITICAL]
+  const color = (k: string, i: number) => (k === "antenna_s11" || k === "ant" ? SERIES[0] : others[i % others.length])
   const ok = Object.entries(s.traces).filter(([, t]) => "re" in t) as [string, { freq_mhz: (number | null)[]; re: (number | null)[]; im: (number | null)[] }][]
   const bad = Object.entries(s.traces).filter(([, t]) => "error" in t)
   const mp = ok.map(([k, t]) => ({ k, f: nums(t.freq_mhz), ...magPhase(nums(t.re), nums(t.im)) }))
   const panels: Panel[] = [
-    { title: "|S11| (as measured)", yTitle: "dB", traces: mp.map((m) => ({ x: m.f, y: m.db, name: m.k, color: colors[m.k] ?? MUTED })) },
-    { title: "Phase (as measured)", yTitle: "deg", traces: mp.map((m) => ({ x: m.f, y: m.deg, name: m.k, color: colors[m.k] ?? MUTED })) },
+    { title: "|S11| (as measured)", yTitle: "dB", traces: mp.map((m, i) => ({ x: m.f, y: m.db, name: m.k, color: color(m.k, i) })) },
+    { title: "Phase (as measured)", yTitle: "deg", traces: mp.map((m, i) => ({ x: m.f, y: m.deg, name: m.k, color: color(m.k, i) })) },
   ]
   return (
     <>
       <div className="small text-muted mb-1">
-        {utc(stamp)} UTC: the raw VNA readings of the antenna and of the four inputs, uncalibrated.
+        {utc(stamp)} UTC, {session.kind} session: the raw VNA readings, uncalibrated
+        ({session.labels.join(", ")}).
       </div>
       {bad.map(([k, t]) => <div key={k} className="text-danger small">{k}: {"error" in t ? t.error : ""}</div>)}
       <StackedPlot panels={panels} cols={2} panelHeight={260} />

@@ -17,8 +17,13 @@ export type Overview = {
   drops?: Num[]
   adcmax?: Num[]
   s11_sessions?: Num[]
+  /** calibration-load spectra (EDGES-3), counted apart from the antenna's */
+  cal_files?: Num[]
+  cal_hours?: Num[]
   summary: {
     n_files: number
+    n_calibration_files: number
+    has_housekeeping: boolean
     n_extracted: number
     n_other_files: number
     tb: number
@@ -33,6 +38,7 @@ export type Overview = {
 export type BrowseFile = {
   file_id: number
   name: string
+  load: string | null
   category: string
   stamp_unix: number | null
   size_mb: number
@@ -45,7 +51,15 @@ export type BrowseFile = {
   adcmin: Num
 }
 
-export type S11Session = { stamp_unix: number; labels: string[]; name: string }
+/** A catalog S11 session (``session_id``), or files sharing a stamp (null id). */
+export type S11Session = { session_id: number | null; stamp_unix: number; kind: string; labels: string[]; name: string }
+
+export type Housekeeping = {
+  available: boolean
+  reason?: string
+  source?: string
+  series?: Record<string, { unit: string; time_unix: Num[]; value: Num[] }>
+}
 
 export type RangeData = {
   deployment: string

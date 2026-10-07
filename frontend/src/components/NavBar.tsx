@@ -1,7 +1,7 @@
 /*
 
 This is the navigation bar: the Nightly Overview (home), Calibrations, the
-Detailed Data View, Raw Data (EDGES-2 so far) and Status. The current tab is highlighted.
+Detailed Data View, Raw Data (EDGES-3 and EDGES-2) and Status. The current tab is highlighted.
 
 */
 
@@ -11,7 +11,7 @@ const TABS: [string, string][] = [
   ["/", "Nightly Overview"],
   ["/calibrations", "Calibrations"],
   ["/data", "Detailed Data View"],
-  ["/raw", "Raw Data (EDGES-2)"],
+  ["/raw", "Raw Data"],
   ["/status", "Status"],
 ]
 
