@@ -347,7 +347,8 @@ def calibration_json(cal: Any, info: Dict[str, Any], source: str) -> Dict[str, A
     modelled S11, and (rcal version 3 and later; else None) the mean Q
     spectrum used in the fit, its per-cycle variance and the receiver
     (front-end) temperature during the spectrum (``frontend_c``: mean, min,
-    max in degC). ``source`` is ``"stored"`` or ``"computed"``.
+    max in degC); and (rcal v4 and later) the mean R = PL / (PLNS − PL) of the
+    three-position switch, which depends on the receiver, not the load. ``source`` is ``"stored"`` or ``"computed"``.
     """
     t_load, t_load_ns = float(info["t_load"]), float(info["t_load_ns"])
     metrics = info.get("metrics") or {}
@@ -361,6 +362,7 @@ def calibration_json(cal: Any, info: Dict[str, Any], source: str) -> Dict[str, A
             "s11_re": _arr(None if s11 is None else np.real(s11), 7),
             "s11_im": _arr(None if s11 is None else np.imag(s11), 7),
             "q": _sig(d.get("q")),
+            "r": _sig(d.get("r")),
             "q_variance": _sig(d.get("q_variance"), 4),
             "frontend_c": _plain(d.get("frontend_c")),
         }
