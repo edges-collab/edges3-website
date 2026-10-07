@@ -2,14 +2,17 @@
  * Plots of one receiver calibration (backend calibrations.calibration_json):
  * the calibrated load temperatures against the known ones (residuals by
  * default), the noise-wave parameters, the modelled S11 of the loads and the
- * receiver, and the hot-load loss. Optionally a second stored configuration
+ * receiver, the hot-load loss, and (rcal v3+) each load's mean Q spectrum and
+ * the receiver temperature during it, with each load's band-median Q per
+ * cycle over time (L1). Optionally a second stored configuration
  * of the same day is overlaid (e.g. the old Alan-mode products). Arrays come
  * at full resolution (3072 channels) and are thinned for plotting only.
  */
 import { useState } from "react"
 import StackedPlot, { MUTED, SERIES, type Panel, type Trace } from "./StackedPlot"
 import { magPhase, robustRange } from "../utils/robust"
-import type { CalibrationData } from "../types/runs"
+import { useJson } from "../hooks/useJson"
+import type { CalibrationData, LoadCycles } from "../types/runs"
 
 const LOADS: [string, string][] = [
   ["ambient", "Ambient load"], ["hot_load", "Hot load"], ["open", "Open cable"], ["short", "Shorted cable"],
@@ -19,6 +22,13 @@ const NW: [keyof CalibrationData["nw"], string][] = [
   ["Tcos", "Noise wave T_cos"], ["Tsin", "Noise wave T_sin"],
 ]
 const MAX_POINTS = 1000
+const CRITICAL = "#d03b3b"
+/** Receiver temperatures across the loads further apart than this are flagged. */
+const FRONTEND_SPREAD_C = 2
+const CYCLE_LOADS: [string, string, string][] = [
+  ["amb", "ambient", "Ambient load"], ["hot", "hot_load", "Hot load"],
+  ["open", "open", "Open cable"], ["short", "short", "Shorted cable"],
+]
 
 const nums = (a: (number | null)[] | null | undefined): number[] =>
   (a ?? []).map((v) => (v === null ? NaN : v))
@@ -43,6 +53,9 @@ type Props = { data: CalibrationData; compare?: CalibrationData | null }
 export default function CalibrationPlots({ data, compare }: Props) {
   const [tempMode, setTempMode] = useState<"residuals" | "values">("residuals")
   const [s11Mode, setS11Mode] = useState<"magphase" | "reim">("magphase")
+  const { data: cycles, error: cyclesError } = useJson<LoadCycles>(
+    data.t_start_unix !== null && data.t_end_unix !== null
+      ? `/api/calibrations/cycles?start=${data.t_start_unix}&end=${data.t_end_unix}` : null)
   const f = nums(data.freq_mhz)
   const band: [number, number] = [Math.min(...f), Math.max(...f)]
   const main = label(data)
@@ -102,6 +115,36 @@ export default function CalibrationPlots({ data, compare }: Props) {
   }
 
   const loss = data.hot_load_loss ? nums(data.hot_load_loss) : null
+
+  // each load's mean Q (rcal v3+), titled with the receiver temperature then
+  const fe = (k: string) => data.loads[k]?.frontend_c ?? null
+  const qPanels: Panel[] = LOADS.filter(([k]) => data.loads[k]?.q).map(([k, name]) => {
+    const y = nums(data.loads[k].q)
+    const t = fe(k)
+    return {
+      title: `${name}: mean Q${t ? ` — receiver ${t.mean.toFixed(1)} °C (${t.min.toFixed(1)}–${t.max.toFixed(1)})` : ""}`,
+      traces: [trace(f, y)], yRange: robustRange([y], f, band, 0.01, 0.99),
+    }
+  })
+  const feMeans = LOADS.map(([k]) => fe(k)?.mean).filter((v): v is number => v !== undefined)
+  const feSpread = feMeans.length > 1 ? Math.max(...feMeans) - Math.min(...feMeans) : 0
+
+  // band-median Q per cycle over the day (L1), flagged cycles in red
+  const day0 = data.t_start_unix !== null ? Math.floor(data.t_start_unix / 86400) * 86400 : 0
+  const cyclePanels: Panel[] = []
+  for (const [k, , name] of CYCLE_LOADS) {
+    const c = cycles?.[k]
+    if (!c) continue
+    const x = nums(c.time_unix).map((t) => (t - day0) / 3600)
+    const y = nums(c.band_median_q)
+    const traces: Trace[] = [{ x, y, name: "band-median Q (60–90 MHz)", mode: "markers" }]
+    const bad = c.flagged.map((b, i) => (b ? i : -1)).filter((i) => i >= 0)
+    if (bad.length) {
+      traces.push({ x: bad.map((i) => x[i]), y: bad.map((i) => y[i]), name: "dropout/outlier",
+                    mode: "markers", color: CRITICAL })
+    }
+    cyclePanels.push({ title: `${name}: ${y.length} cycles${bad.length ? `, ${bad.length} flagged` : ""}`, traces })
+  }
   const t = (s: number | null) => (s === null ? "–" : new Date(s * 1000).toISOString().slice(0, 16).replace("T", " "))
 
   return (
@@ -151,6 +194,37 @@ export default function CalibrationPlots({ data, compare }: Props) {
           </div>
         </div>
         <StackedPlot panels={s11Panels} cols={2} panelHeight={120} xRange={band} />
+      </section>
+
+      {qPanels.length > 0 && (
+        <section className="border rounded p-2">
+          <h3 className="h6">Calibration spectra</h3>
+          <p className="small text-muted mb-1">
+            Each load's mean Q, exactly as used in the fit, and the receiver (front-end) temperature
+            during its spectrum.
+          </p>
+          {feSpread > FRONTEND_SPREAD_C && (
+            <div className="alert alert-warning py-1 px-2 small mb-1">
+              The receiver temperature differed by {feSpread.toFixed(1)} °C between the loads' spectra
+              (mean {feMeans.map((v) => v.toFixed(1)).join(", ")} °C): the thermal control did not hold it, which
+              can bias the open and shorted cables (e.g. 2026_278, edges-database DATA_ISSUES #34).
+            </div>
+          )}
+          <StackedPlot panels={qPanels} panelHeight={110} xRange={band} />
+        </section>
+      )}
+
+      <section className="border rounded p-2">
+        <h3 className="h6">Change over time</h3>
+        <p className="small text-muted mb-1">
+          Band-median Q (60–90 MHz) of each cycle of the loads' spectra, from the L1 products;
+          dropouts and outliers in red.
+        </p>
+        {cyclesError ? <div className="small text-muted">{cyclesError}</div>
+          : !cycles ? <div className="small text-muted">Loading the cycles…</div>
+            : cyclePanels.length === 0 ? <div className="small text-muted">No L1 products for these spectra.</div>
+              : <StackedPlot panels={cyclePanels} panelHeight={100}
+                  xTitle={`Hours (UTC) from ${new Date(day0 * 1000).toISOString().slice(0, 10)}`} />}
       </section>
 
       {loss && (

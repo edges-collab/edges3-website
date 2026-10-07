@@ -16,8 +16,9 @@ import zipfile
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
-from conftest import ALT_PARAMS, CAL_DATE, S11_GOOD
+from conftest import ALT_PARAMS, CAL_DAY, CAL_DATE, S11_GOOD, S11_OLD
 
 import calibrations
 import config
@@ -50,6 +51,10 @@ params = json.loads(pathlib.Path(a[a.index("--params") + 1]).read_text())
 """
 
 CUSTOM = {"fit": {"cterms": 7}}
+GAP_DAYS = [
+    {"cal_day": "2022_316", "status": "no_temperature", "s11_session": None, "issues": [], "error": None},
+    {"cal_day": "2026_257", "status": "s11_grids_differ", "s11_session": None, "issues": [], "error": None},
+]
 
 
 @pytest.fixture
@@ -69,6 +74,11 @@ def client(settings, tmp_path, monkeypatch):
     (tmp_path / "calls.txt").write_text("")
     products_api.configure(settings)
     calibrations.clear_cache()
+    # days the pipeline skipped (the synthetic catalog has none)
+    prod = products_api.get_products()
+    real = prod.calibration_days
+    monkeypatch.setattr(prod, "calibration_days", lambda *a, **k: pd.concat(
+        [real(*a, **k), pd.DataFrame(GAP_DAYS)], ignore_index=True))
     app = FastAPI()
     app.include_router(runs_api.router)
     yield TestClient(app), tmp_path / "calls.txt"
@@ -95,7 +105,10 @@ def test_calibration_list(client):
     d = c.get("/api/calibrations").json()
     assert [r["cal_day"] for r in d["stored"]] == [CAL_DATE]
     assert d["stored"][0]["s11_session"] == S11_GOOD
-    assert d["missing"] == []  # the only catalog calibration day is stored
+    assert [(m["cal_day"], m["status"]) for m in d["missing"]] == [
+        ("2022_316", "no_temperature"), ("2026_257", "s11_grids_differ")]
+    assert "VNA frequency grids" in d["missing"][1]["reason"]
+    assert d["s11_sessions"] == [S11_OLD, S11_GOOD]
     assert d["default_hash"] == rcal.config_hash() and not d["version_skew"]
     assert [o["config_hash"] for o in d["other_configs"]] == [rcal.config_hash(ALT_PARAMS)]
     assert d["defaults"]["fit"]["cterms"] == 6
@@ -115,6 +128,9 @@ def test_stored_calibration(client):
     assert d["loads"]["open"]["s11_re"][0] == pytest.approx(0.2)
     assert d["rms_k"]["hot_load"] == pytest.approx(0.1)
     assert d["hot_load_loss"][0] == pytest.approx(0.99)
+    # rcal v3: each load's mean Q (7 significant digits) and receiver temperature
+    assert d["loads"]["ambient"]["q"][0] == pytest.approx(0.0005, rel=1e-6)
+    assert d["loads"]["open"]["frontend_c"] == {"mean": 27.0, "min": 26.5, "max": 27.5}
     assert d["issues"] and d["config"]["fit"]["cterms"] == 6
     assert (d["t_load"], d["t_load_ns"]) == (300.0, 1000.0)
     assert c.get("/api/calibrations/stored/2025:102").json() == d
@@ -138,8 +154,8 @@ def test_stored_calibration_of_another_config(client):
     ("day", "code", "text"),
     [
         ("2026_257", 404, "mixes VNA"),
-        ("2022_316", 404, "temperature-log"),
-        ("2025_050", 404, "2024–2025"),
+        ("2022_316", 404, "temperature-log readings"),
+        ("2025_050", 404, "no calibration spectra"),
         ("April", 400, "not a calibration day"),
     ],
 )
@@ -166,10 +182,35 @@ def test_resolve(client):
     # a day without a stored calibration: said, not an error
     gap = c.post("/api/calibrations/resolve", json={"day": "2026_257"}).json()
     assert gap["stored"] is None and "VNA" in gap["unavailable"]
-    # ... and no settings can calibrate it: nothing to run
+    assert gap["day_status"]["status"] == "s11_grids_differ"
+    # computing it may still work (e.g. with another S11 session): the status is a warning
     gap = c.post("/api/calibrations/resolve", json={"day": "2026_257", "params": CUSTOM}).json()
-    assert gap["source"] == "computed" and gap["id"] is None and "VNA" in gap["unavailable"]
-    assert c.post("/api/calibrations", json={"day": "2026_257", "params": CUSTOM}).status_code == 400
+    assert gap["source"] == "computed" and gap["id"] and gap["unavailable"] is None
+    assert "VNA" in gap["day_status"]["reason"]
+
+
+def test_s11_session_override(client):
+    c, _ = client
+    # another S11 session is never the stored default, even with default settings
+    r = c.post("/api/calibrations/resolve", json={"s11_session": S11_OLD}).json()
+    assert r["source"] == "computed" and not r["is_default"] and r["s11_session"] == S11_OLD
+    same = c.post("/api/calibrations/resolve", json={"s11_session": S11_GOOD}).json()
+    assert same["source"] == "computed" and same["id"] != r["id"]
+    assert c.post("/api/calibrations/resolve", json={"s11_session": "Latest"}).json()["source"] == "stored"
+    assert c.post("/api/calibrations/resolve", json={"s11_session": "1999_001_00"}).status_code == 400
+    d = _wait(c, "calibration", c.post("/api/calibrations", json={"s11_session": S11_OLD}).json()["id"])
+    assert d["status"]["state"] == "done", d
+    assert d["result"]["s11_session"] == S11_OLD and d["result"]["s11_override"] == S11_OLD
+
+
+def test_load_cycles(client):
+    c, _ = client
+    t0 = CAL_DAY.timestamp()
+    d = c.get("/api/calibrations/cycles", params={"start": t0, "end": t0 + 86400}).json()
+    assert set(d) == {"amb", "hot", "open", "short"}
+    amb = d["amb"]
+    assert amb is None or len(amb["time_unix"]) == len(amb["band_median_q"]) == len(amb["flagged"])
+    assert c.get("/api/calibrations/cycles", params={"start": t0, "end": t0 + 9 * 86400}).status_code == 400
 
 
 @pytest.mark.parametrize(

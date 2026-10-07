@@ -223,16 +223,19 @@ Four tabs:
   every calibration day; nothing is computed here): the residuals of the
   four loads (calibrated − known, or the values), the noise-wave
   parameters, the modelled S11s of the loads and the receiver, the hot-load
-  loss, the issues, and its settings and configuration hash. Days without a
-  calibration are listed with the reason (none were taken in 2024–2025;
-  2022_316 has no temperature log; 2026_257's S11 session mixes VNA grids).
-  Changing a setting (cterms, wterms, the fit band, S11 model terms, probes,
-  …) asks the server whether it is still the default; if not, **Run**
-  computes the calibration with those settings in the background with the
-  pipeline's own code (`rcal.calibrate_day`, ~45 s, ~2 GB), labelled as
-  computed. The S11 session is always the one the catalog recommends, and
-  the fit band is also the calibration band. Another stored configuration
-  (e.g. the old Alan-mode products) can be overlaid for comparison.
+  loss, each load's mean Q spectrum with the receiver temperature during it
+  (flagged when it differs between the loads by more than 2 °C), each
+  load's band-median Q per cycle over time (from L1, flagged cycles in red),
+  the issues, and its settings and configuration hash. Days without a
+  calibration are listed with the pipeline's reason
+  (`Products.calibration_days`, e.g. `no_temperature`,
+  `s11_grids_differ`). Changing a setting (cterms, wterms, the fit band, S11
+  model terms, probes, …) or choosing another full S11 session asks the
+  server whether it is still the stored default; if not, **Run** computes
+  the calibration in the background with the pipeline's own code
+  (`rcal.calibrate_day`, ~45 s, ~2 GB), labelled as computed. The fit band
+  is also the calibration band. Another stored configuration (e.g. the old
+  Alan-mode products) can be overlaid for comparison.
 * **Detailed Data View** (`/data`): choose a night, the antenna S11
   session and its fit window on the left; the receiver calibration is the
   one selected on the Calibrations tab (a computed one runs first if
