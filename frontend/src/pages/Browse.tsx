@@ -149,6 +149,9 @@ function RangeView({ dep, start, end, onRange }: {
   const [session, setSession] = useState<S11Session | null>(null)
   const pick = (stamp: number) => setSession(r?.s11_sessions.find((x) => x.stamp_unix === stamp) ?? null)
   const span = t1 - t0
+  // both figures show the same times; zooming either zooms both
+  const [view, setView] = useState<[number, number] | null>(null)
+  const shown: [number, number] = view ?? [t0, t1]
 
   const strips: Strip[] = useMemo(() => {
     if (!r) return []
@@ -182,10 +185,14 @@ function RangeView({ dep, start, end, onRange }: {
       name: "S11 session (click)", marker: { color: MUTED, symbol: "diamond", size: 9 },
       hovertemplate: "S11 %{text}<extra></extra>",
     }]
-    const out: Strip[] = [
+    return [
       { title: "files", traces: files, weight: 0.5, events: true },
       { title: "S11", traces: s11, weight: 0.4, events: true },
     ]
+  }, [r])
+
+  const conditions: Strip[] = useMemo(() => {
+    const out: Strip[] = []
     // the receiver's own log, one strip per unit (the hot load apart: ~100 °C)
     if (hk?.available && hk.series) {
       const groups = new Map<string, [string, (typeof hk.series)[string]][]>()
@@ -206,14 +213,14 @@ function RangeView({ dep, start, end, onRange }: {
       const line = (k: string, name: string, color: string): Partial<Data> => ({
         type: "scatter", mode: "lines", x, y: nums(w.series![k]), name, line: { color, width: 1 },
       })
-      const temps = [["ambient_temp", "ambient", SERIES[0]], ["rack_temp", "rack", SERIES[1]],
-        ["frontend", "front end (receiver not recorded)", MUTED]] as const
+      const temps = [["ambient_temp", "site: ambient", SERIES[0]], ["rack_temp", "site: rack", SERIES[1]],
+        ["frontend", "site: front end (receiver not recorded)", MUTED]] as const
       const t = temps.filter(([k]) => w.series![k]).map(([k, n, c]) => line(k, n, c))
       if (t.length) out.push({ title: "site weather [K]", traces: t })
-      if (w.series.ambient_hum) out.push({ title: "humidity [%]", traces: [line("ambient_hum", "humidity", SERIES[2])], weight: 0.6 })
+      if (w.series.ambient_hum) out.push({ title: "site humidity [%]", traces: [line("ambient_hum", "site: humidity", SERIES[2])], weight: 0.6 })
     }
     return out
-  }, [r, w, hk])
+  }, [w, hk])
 
   return (
     <>
@@ -227,20 +234,32 @@ function RangeView({ dep, start, end, onRange }: {
           {r && <span className="small text-muted">{r.files.length} spectrum files, {r.s11_sessions.length} S11 sessions
             {w && !w.available ? `; weather: ${w.reason}` : ""}{hk && !hk.available ? `; housekeeping: ${hk.reason}` : ""}</span>}
           {dep === "edges3-mro" && (
-            <Link className="small ms-auto" to={`/?date=${start}`}>The night of {start} in the Nightly Overview →</Link>
+            <Link className="btn btn-sm btn-outline-primary ms-auto" to={`/?date=${start}`}>
+              Open the night of {start} in the Nightly Overview →
+            </Link>
           )}
         </div>
         {error && <div className="alert alert-warning small py-1">{error}</div>}
         {!r ? <div className="text-muted small p-3">Loading…</div>
-          : <TimeStrips strips={strips} height={180 + 110 * strips.length} revision={`${start}/${end}`}
+          : <TimeStrips strips={strips} height={230} revision={`${start}/${end}`} xRange={shown}
+              onXRange={setView}
               onPick={(c) => {
                 if (typeof c === "string" && c.startsWith("s11:")) pick(Number(c.slice(4)))
                 else if (typeof c === "number") setFileId(c)
               }} />}
-        <p className="small text-muted mb-0 px-2">
-          Receiver: its own housekeeping log ({hk?.source ?? "none"}). Site weather: the MRO weather log; its
-          front-end temperature is not attributed to a receiver yet (edges-database is asking the team whose it is).
+      </section>
+
+      <section className="border rounded p-2">
+        <h3 className="h6 mb-1">Receiver housekeeping and site weather</h3>
+        <p className="small text-muted mb-1">
+          The receiver's own log ({hk?.source ?? "none"}{hk && !hk.available ? `: ${hk.reason}` : ""}) and the MRO
+          weather log ({w && !w.available ? w.reason : "every 5 min"}). The weather's front-end temperature is not
+          attributed to a receiver yet (edges-database is asking the team whose it is). Zooming here zooms the files above.
         </p>
+        {conditions.length === 0
+          ? <div className="text-muted small p-3">{!w || !hk ? "Loading…" : "Nothing logged in this range."}</div>
+          : <TimeStrips strips={conditions} height={120 + 150 * conditions.length} revision={`${start}/${end}/c`}
+              xRange={shown} onXRange={setView} />}
       </section>
 
       {r && r.files.length > 0 && (
@@ -322,15 +341,23 @@ function S11View({ dep, session }: { dep: string; session: S11Session }) {
     session.session_id !== null ? `session_id=${session.session_id}` : `stamp=${stamp}`}`)
   if (error) return <div className="text-danger small">{error}</div>
   if (!s) return <div className="text-muted small">Reading the session…</div>
-  // the antenna in the first colour; the rest (VNA inputs, standards, loads) cycle
+  // the antenna solid blue; the rest (VNA inputs, standards, loads) each a
+  // distinct colour and dash (a full EDGES-3 session has 12 traces)
   const others = [SERIES[1], SERIES[2], MUTED, CRITICAL]
-  const color = (k: string, i: number) => (k === "antenna_s11" || k === "ant" ? SERIES[0] : others[i % others.length])
+  const dashes = ["solid", "dash", "dot"] as const
+  const isAnt = (k: string) => k === "antenna_s11" || k === "ant"
+  const style = (k: string, j: number) => isAnt(k)
+    ? { color: SERIES[0], dash: "solid" as const }
+    : { color: others[j % others.length], dash: dashes[Math.floor(j / others.length) % dashes.length] }
   const ok = Object.entries(s.traces).filter(([, t]) => "re" in t) as [string, { freq_mhz: (number | null)[]; re: (number | null)[]; im: (number | null)[] }][]
   const bad = Object.entries(s.traces).filter(([, t]) => "error" in t)
-  const mp = ok.map(([k, t]) => ({ k, f: nums(t.freq_mhz), ...magPhase(nums(t.re), nums(t.im)) }))
+  // the antenna first, then the others in label order
+  const mp = [...ok.filter(([k]) => isAnt(k)), ...ok.filter(([k]) => !isAnt(k))]
+    .map(([k, t], i) => ({ k, f: nums(t.freq_mhz), ...magPhase(nums(t.re), nums(t.im)),
+      ...style(k, isAnt(k) ? 0 : i - (ok.some(([a]) => isAnt(a)) ? 1 : 0)) }))
   const panels: Panel[] = [
-    { title: "|S11| (as measured)", yTitle: "dB", traces: mp.map((m, i) => ({ x: m.f, y: m.db, name: m.k, color: color(m.k, i) })) },
-    { title: "Phase (as measured)", yTitle: "deg", traces: mp.map((m, i) => ({ x: m.f, y: m.deg, name: m.k, color: color(m.k, i) })) },
+    { title: "|S11| (as measured)", yTitle: "dB", traces: mp.map((m) => ({ x: m.f, y: m.db, name: m.k, color: m.color, dash: m.dash })) },
+    { title: "Phase (as measured)", yTitle: "deg", traces: mp.map((m) => ({ x: m.f, y: m.deg, name: m.k, color: m.color, dash: m.dash })) },
   ]
   return (
     <>

@@ -8,6 +8,7 @@ import DataView from "./pages/DataView.tsx"
 import Browse from "./pages/Browse.tsx"
 
 import NavBar from "./components/NavBar.tsx"
+import UpdateBanner from "./components/UpdateBanner.tsx"
 import { CalibrationProvider } from "./state/CalibrationContext.tsx"
 
 function App() {
@@ -15,6 +16,7 @@ function App() {
     <CalibrationProvider>
       <main className="app">
         <NavBar />
+        <UpdateBanner />
         <div className="page">
           <Routes>
             <Route path="/" element={<LastNight />} />

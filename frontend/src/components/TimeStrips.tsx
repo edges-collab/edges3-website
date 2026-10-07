@@ -25,6 +25,8 @@ type Props = {
   /** keeps the user's zoom while this stays the same */
   revision: string
   barmode?: "group" | "stack" | "overlay"
+  /** the time range shown (POSIX s); figures given the same one line up */
+  xRange?: [number, number] | null
   onXRange?: (r: [number, number] | null) => void
   onPick?: (customdata: unknown) => void
 }
@@ -36,7 +38,7 @@ export const utc = (t: number | null): string | null =>
 /** A Plotly date string (UTC, no zone) -> POSIX seconds. */
 const toUnix = (s: unknown): number => Date.parse(`${String(s).replace(" ", "T")}${String(s).length <= 10 ? "" : "Z"}`) / 1000
 
-export default function TimeStrips({ strips, height = 600, revision, barmode, onXRange, onPick }: Props) {
+export default function TimeStrips({ strips, height = 600, revision, barmode, xRange, onXRange, onPick }: Props) {
   const { data, layout } = useMemo(() => {
     const gap = 0.04
     const total = strips.reduce((s, x) => s + (x.weight ?? 1), 0)
@@ -51,9 +53,13 @@ export default function TimeStrips({ strips, height = 600, revision, barmode, on
       plot_bgcolor: "#fcfcfb",
       paper_bgcolor: "#fcfcfb",
       font: { size: 11, color: "#0b0b0b" },
-      uirevision: revision,
+      // a new range (e.g. zoomed in a linked figure) is applied, else the user's zoom is kept
+      uirevision: `${revision}|${xRange ? xRange.join("-") : ""}`,
       barmode,
-      xaxis: { type: "date", gridcolor: GRID, title: { text: "UTC" }, anchor: `y${strips.length > 1 ? strips.length : ""}` },
+      xaxis: {
+        type: "date", gridcolor: GRID, title: { text: "UTC" }, anchor: `y${strips.length > 1 ? strips.length : ""}`,
+        ...(xRange ? { range: [utc(xRange[0]), utc(xRange[1])], autorange: false } : {}),
+      },
     }
     const out: Data[] = []
     let top = 1
@@ -74,7 +80,7 @@ export default function TimeStrips({ strips, height = 600, revision, barmode, on
       for (const t of s.traces) out.push({ ...t, xaxis: "x", yaxis: ax } as Data)
     })
     return { data: out, layout: L as Partial<Layout> }
-  }, [strips, height, revision, barmode])
+  }, [strips, height, revision, barmode, xRange])
 
   return (
     <Plot
