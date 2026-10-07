@@ -10,9 +10,10 @@ site never scans the raw data tree or merges temperature-log files.
   :func:`resolve_observation` return a JSON-serialisable ``inputs`` dict with
   the exact files, their versions and ``issues``. ``"Latest"`` is the latest
   night with antenna data, and the antenna S11 session nearest before it.
-* **Calibration days** (:func:`calibration_days`), only to say which days
-  have no stored receiver calibration. The calibration itself, inputs
-  included, is edges-pipeline's (``calibrations.py``).
+* **Full S11 sessions** (:func:`full_s11_sessions`), which a computed
+  receiver calibration may use instead of the recommended one. The
+  calibration itself, inputs included, is edges-pipeline's
+  (``calibrations.py``).
 
 The ambient-load temperature at each antenna file is shown for information
 (the calibration of the antenna needs none): the ``.tmp`` snapshot written at
@@ -30,7 +31,6 @@ import config
 import products_api
 
 DEPLOYMENT = products_api.DEPLOYMENT
-CAL_LOADS = ("amb", "hot", "open", "short")
 #: Temperature-log readings are every ~5.2 min; accept the nearest within this.
 TEMPLOG_TOLERANCE_S = 15 * 60
 LATEST = "Latest"
@@ -48,10 +48,6 @@ class InputError(ValueError):
 def open_catalog() -> Any:
     """A read-only catalog connection (the one next to the pipeline products)."""
     return products_api._open_catalog(products_api.get_products())
-
-
-def _stamp(t_unix: float, fmt: str) -> str:
-    return datetime.fromtimestamp(t_unix, timezone.utc).strftime(fmt)
 
 
 def _iso(t_unix: Optional[float]) -> Optional[str]:
@@ -212,18 +208,9 @@ def _temperatures(
 # ---------------------------------------------------------------------------
 # Calibrations
 # ---------------------------------------------------------------------------
-def calibration_days(cat: Any) -> List[str]:
-    """UTC days (``YYYY_DDD``) on which all four calibration loads start."""
-    df = cat.sql(
-        "SELECT load, stamp_unix FROM v_file WHERE kind = 'acq' AND status = 'present'"
-        " AND category = 'science' AND deployment = ?"
-        f" AND load IN ({','.join('?' * len(CAL_LOADS))})",
-        (DEPLOYMENT, *CAL_LOADS),
-    )
-    days: Dict[str, set] = {}
-    for load, t in zip(df.load, df.stamp_unix):
-        days.setdefault(_stamp(t, "%Y_%j"), set()).add(load)
-    return sorted(d for d, loads in days.items() if len(loads) == len(CAL_LOADS))
+def full_s11_sessions(cat: Any) -> List[str]:
+    """Stems of the full (calibration) S11 sessions, oldest first."""
+    return sorted(set(_s11_sessions(cat, ("full",)).stem))
 
 
 # ---------------------------------------------------------------------------

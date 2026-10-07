@@ -83,6 +83,18 @@ export default function Calibrations() {
           </select>
         </label>
         {list && <div className="small text-muted mb-2">{list.note}</div>}
+        <label className="d-block mb-2 small">
+          <span className="text-muted">S11 session</span>
+          <select className="form-select form-select-sm" value={calibration.s11_session ?? "Latest"}
+            onChange={(e) => setCalibration({
+              ...calibration, s11_session: e.target.value === "Latest" ? undefined : e.target.value,
+            })}>
+            <option value="Latest">
+              Recommended for the day{resolved?.stored ? ` (${resolved.stored.s11_session})` : ""}
+            </option>
+            {[...(list?.s11_sessions ?? [])].reverse().map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </label>
         {list?.version_skew && (
           <div className="alert alert-warning small py-1 px-2">
             The site's edges-pipeline ({list.pipeline}) is not the version that made the stored
@@ -109,12 +121,12 @@ export default function Calibrations() {
           </div>
         )}
         <div className="small text-muted mt-1">
-          The fit band (wfstart–wfstop) is also the calibration band; the S11 session is the one the
-          catalog recommends for the day.
+          The fit band (wfstart–wfstop) is also the calibration band. Another S11 session is always
+          computed (the stored calibration uses the recommended one).
         </div>
-        {Object.keys(calibration.params).length > 0 && (
+        {(Object.keys(calibration.params).length > 0 || calibration.s11_session) && (
           <button className="btn btn-outline-secondary btn-sm mt-2 w-100"
-            onClick={() => setCalibration({ ...calibration, params: {} })}>
+            onClick={() => setCalibration({ day: calibration.day, params: {} })}>
             Back to the stored default settings
           </button>
         )}
@@ -137,19 +149,21 @@ export default function Calibrations() {
               </>
             ) : (
               <>
-                <span className="badge text-bg-warning">Computed with these settings</span>
+                <span className="badge text-bg-warning">
+                  Computed with these settings{resolved.s11_session ? ` and S11 ${resolved.s11_session}` : ""}
+                </span>
                 <div className="text-muted mt-1">
                   Config <code>{short(resolved.config_hash)}</code> (default{" "}
                   <code>{short(resolved.default_hash)}</code>), by edges-pipeline {resolved.pipeline}.
                 </div>
-                {resolved.unavailable ? (
+                {resolved.day_status && (
                   <div className="alert alert-warning py-1 px-2 mt-2 mb-0">
-                    {resolved.day} cannot be calibrated with any settings: {resolved.unavailable}.
+                    The pipeline has no calibration of {resolved.day}: {resolved.day_status.reason}.
+                    Computing it may fail for the same reason.
                   </div>
-                ) : (
-                  <RunStatusBox status={resolved.status} detail={detail} onRun={start}
-                    what="Calibration" seconds="~45 s" />
                 )}
+                <RunStatusBox status={resolved.status} detail={detail} onRun={start}
+                  what="Calibration" seconds="~45 s" />
                 {detail?.status.state === "done" && (
                   <a className="d-block mt-1" href={withBaseUrl(`/api/runs/calibration/${detail.id}/download`)}>
                     Download (zip: the solution and its JSON)

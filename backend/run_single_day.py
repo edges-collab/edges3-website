@@ -218,7 +218,8 @@ def _write_json(path: Path, payload: Any) -> None:
 # Stage 1: calibration (non-default settings)
 # ---------------------------------------------------------------------------
 def run_calibration(
-    day: str, params: Dict[str, Any], run_dir: Path, catalog_db: Optional[str] = None
+    day: str, params: Dict[str, Any], run_dir: Path, catalog_db: Optional[str] = None,
+    s11_session: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Compute one day's receiver calibration with edges-pipeline (``params``:
     the full settings, by section). Writes
@@ -237,10 +238,13 @@ def run_calibration(
         d = Settings.default()
         settings = Settings(catalog_db, d.products_db, d.products_root)
     print(f"[run] calibrating {day} with {json.dumps(params)} (edges-pipeline rcal) ...")
-    cal, info = rcal.calibrate_day(day, params, settings=settings)
+    if s11_session:
+        print(f"[run] S11 session {s11_session} instead of the recommended one")
+    cal, info = rcal.calibrate_day(day, params, settings=settings, s11_session=s11_session)
     write_solution(run_dir / SOLUTION_FILE, cal, float(info["t_load"]), float(info["t_load_ns"]))
     result = calibrations.calibration_json(cal, info, "computed")
     result["params"] = params  # the full settings
+    result["s11_override"] = s11_session
     result["seconds"] = round(time.time() - tic, 1)
     for issue in result["issues"]:
         print(f"[run] issue: {issue}")
@@ -410,6 +414,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--day", default=None, help="Calibration: day YYYY_DDD")
     p.add_argument("--catalog_db", default=None,
                    help="Calibration: catalog database (default: the pipeline's)")
+    p.add_argument("--s11_session", default=None,
+                   help="Calibration: a full S11 session (default: the recommended one)")
     p.add_argument("--inputs", default=None,
                    help="Observation: inputs.json (catalog_inputs.resolve_observation)")
     p.add_argument("--calibration", default=None,
@@ -423,7 +429,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not args.day:
             p.error("--day is required for the calibration stage")
         try:
-            run_calibration(args.day, params, run_dir, args.catalog_db)
+            run_calibration(args.day, params, run_dir, args.catalog_db, args.s11_session)
         except LookupError as e:
             # the pipeline says why it cannot (not a KeyError/IndexError: a bug)
             if type(e) is not LookupError:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 
 import pytest
 
@@ -76,10 +75,10 @@ def test_default_config_is_the_promoted_one():
     assert none["hash"] is None and none["config"] == rcal.DEFAULT_CONFIG
 
 
-def test_gap_reasons():
-    assert "VNA" in calibrations.gap_reason("2026_257")
-    assert "2024–2025" in calibrations.gap_reason("2024_200")
-    today = time.strftime("%Y_%j", time.gmtime())
-    assert "not processed yet" in calibrations.gap_reason(today)
-    assert "no calibration for this day" in calibrations.gap_reason("2023_001")
-    assert calibrations.hopeless("2023_001") is None and calibrations.hopeless("2022_316")
+def test_status_texts():
+    statuses = {"2026_257": {"status": "s11_grids_differ",
+                             "reason": calibrations.status_text("s11_grids_differ")}}
+    assert "VNA" in calibrations.unavailable_reason(statuses, "2026_257")
+    assert "no calibration spectra" in calibrations.unavailable_reason(statuses, "2024_200")
+    assert "boom" in calibrations.status_text("failed", "boom")
+    assert calibrations.status_text("something_new") == "something_new"

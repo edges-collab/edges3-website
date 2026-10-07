@@ -163,6 +163,8 @@ def rcal_arrays(offset: float = 0.0, alan_mode: bool = False) -> dict:
         if not alan_mode:
             out[f"s11_{name}_real"] = np.full_like(f, 0.1 * i)
             out[f"s11_{name}_imag"] = np.full_like(f, -0.05)
+            out[f"q_{name}"] = np.full_like(f, 0.0005 + 0.25 * i)
+            out[f"q_variance_{name}"] = np.full_like(f, 1e-6)
     if alan_mode:
         out["hot_load_loss"] = np.stack([f, np.full_like(f, 0.98)], axis=1)
     return out
@@ -188,6 +190,8 @@ def fake_rcal(settings, day: str, params=None, arrays=None) -> str:
     metrics = {"method": "edges.cal", "t_load": 300.0, "t_load_ns": 1000.0,
                "issues": ["no full S11 session earlier that day; using 2025-04-11T05:00:00+00:00"],
                "n_readings": {"ambient": 7, "hot": 7},
+               "frontend_c": {ld: {"mean": 25.0 + i, "min": 24.5 + i, "max": 25.5 + i}
+                              for i, ld in enumerate(("amb", "hot", "open", "short"))},
                "spectra": {"amb": [f"{day}_03_00_00_amb.acq"]}}
     write_product(dest, metrics, arrays or rcal_arrays(),
                   {"t_load": 300.0, "t_load_ns": 1000.0, "config": cfg.algorithm_params})

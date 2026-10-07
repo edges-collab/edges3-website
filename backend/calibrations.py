@@ -33,7 +33,6 @@ import math
 import threading
 import time
 from collections import OrderedDict
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -51,19 +50,23 @@ except ImportError:  # optional: products_api.get_products() answers 503
 LATEST = "Latest"
 LOADS = ("ambient", "hot_load", "open", "short")
 
-#: Days the pipeline cannot calibrate whatever the settings, and why
-#: (edges-database ISSUES).
-KNOWN_GAPS = {
-    "2022_316": "no temperature-log coverage of its calibration spectra",
-    "2026_257": "its S11 session mixes VNA frequency grids (DATA_ISSUES #29)",
+#: What the pipeline's day statuses (``Products.calibration_days``) mean.
+STATUS_TEXT = {
+    "pending": "not computed yet: the pipeline adds new days within about 12 hours",
+    "no_temperature": "too few temperature-log readings during its ambient or hot-load spectrum",
+    "s11_grids_differ": "its S11 session mixes VNA frequency grids",
+    "no_s11_session": "no full S11 session for it",
+    "incomplete": "not all four calibration loads have spectra",
+    "missing": "some of its files are missing",
+    "unhashed": "some of its files are not checksummed in the catalog yet",
+    "unsettled": "some of its files are still being written",
 }
-GAPS_NOTE = (
-    "No calibrations were taken in 2024–2025. 2022_316 has no temperature log and "
-    "2026_257's S11 session mixes VNA grids, so neither has a calibration. "
+NOTE = (
+    "Days with all four calibration loads are listed; there were none in 2024–2025. "
     "New days appear within about 12 hours of their data."
 )
-#: A day newer than this without a stored calibration is "not processed yet".
-NEW_DAY_S = 2 * 86400
+#: Day statuses are cached this long (computing them reads the catalog, ~3-7 s).
+STATUS_TTL_S = 10 * 60
 
 #: The settings the page offers, by section: (key, label, min, max, integer).
 #: The others (``fit.Lh`` -1 only, ``fit.delay_sweep_ns``, ``dicke``: a
@@ -191,31 +194,53 @@ def day_key(day: str) -> str:
     return _cal_day_key(day)
 
 
-def _day_of(key: str) -> Optional[float]:
+def status_text(status: str, error: Optional[str] = None) -> str:
+    """A day status (``Products.calibration_days``) in words."""
+    if status == "failed":
+        return f"the pipeline failed on it: {error or 'no error recorded'}"
+    return STATUS_TEXT.get(status, status)
+
+
+_status_cache: Dict[str, Any] = {"key": None, "t": 0.0, "rows": None}
+_status_lock = threading.Lock()
+
+
+def day_statuses(prod: Any) -> Dict[str, Dict[str, Any]]:
+    """Every calibration day (all four loads) and what the pipeline made of it
+    in the default configuration: ``status``, ``reason`` (None when done),
+    ``s11_session``, ``issues``. Cached for :data:`STATUS_TTL_S` (per default
+    configuration); one request computes it at a time."""
     try:
-        return datetime.strptime(key, "%Y_%j").replace(tzinfo=timezone.utc).timestamp()
-    except ValueError:
-        return None
+        h = prod.config_hash("rcal")
+    except LookupError:
+        h = None
+    with _status_lock:
+        c = _status_cache
+        if c["rows"] is not None and c["key"] == h and time.time() - c["t"] < STATUS_TTL_S:
+            return c["rows"]
+        if h is None:
+            rows: Dict[str, Dict[str, Any]] = {}
+        else:
+            df = prod.calibration_days()
+            rows = {}
+            for r in df.to_dict("records"):
+                st = str(r["status"])
+                rows[str(r["cal_day"])] = {
+                    "status": st,
+                    "reason": None if st == "done" else status_text(st, r.get("error")),
+                    "s11_session": r["s11_session"] if isinstance(r["s11_session"], str) else None,
+                    "issues": [str(i) for i in (r.get("issues") or [])],
+                }
+        _status_cache.update(key=h, t=time.time(), rows=rows)
+        return rows
 
 
-def hopeless(key: str) -> Optional[str]:
-    """Why no settings can calibrate this day, if that is known."""
-    if key in KNOWN_GAPS:
-        return KNOWN_GAPS[key]
-    if key[:4] in ("2024", "2025"):
-        return "no calibrations were taken in 2024–2025"
-    return None
-
-
-def gap_reason(key: str, now: Optional[float] = None) -> str:
-    """Why a day has no stored calibration (as far as the site knows)."""
-    why = hopeless(key)
-    if why:
-        return why
-    t = _day_of(key)
-    if t is not None and (now or time.time()) - t < NEW_DAY_S:
-        return "not processed yet: new days appear within about 12 hours"
-    return "the pipeline has no calibration for this day (its inputs are incomplete or unusable)"
+def unavailable_reason(statuses: Dict[str, Dict[str, Any]], key: str) -> str:
+    """Why a day has no stored calibration."""
+    st = statuses.get(key)
+    if st is None:
+        return "no calibration spectra (all four loads) on this day"
+    return st["reason"] or "not stored yet"
 
 
 def stored_rows(prod: Any) -> List[Dict[str, Any]]:
@@ -231,14 +256,14 @@ def stored_rows(prod: Any) -> List[Dict[str, Any]]:
     return [{k: _scalar(v) for k, v in r.items()} for r in df.to_dict("records")]
 
 
-def day_list(prod: Any, catalog_days: List[str]) -> Dict[str, Any]:
-    """Stored days, plus catalog calibration days without one (and why)."""
+def day_list(prod: Any) -> Dict[str, Any]:
+    """Stored days, plus the calibration days without one (and why)."""
     rows = stored_rows(prod)
     have = {r["cal_day"] for r in rows}
-    now = time.time()
-    missing = [{"cal_day": d, "reason": gap_reason(d, now)}
-               for d in sorted(set(catalog_days) - have)]
-    return {"stored": rows, "missing": missing, "note": GAPS_NOTE}
+    statuses = day_statuses(prod)
+    missing = [{"cal_day": d, "status": st["status"], "reason": unavailable_reason(statuses, d)}
+               for d, st in sorted(statuses.items()) if d not in have]
+    return {"stored": rows, "missing": missing, "note": NOTE}
 
 
 def latest_day(prod: Any) -> str:
@@ -305,23 +330,24 @@ def _plain(x: Any) -> Any:
     return _scalar(x)
 
 
-def _loss(info: Dict[str, Any]) -> Optional[np.ndarray]:
-    """The hot-load loss on ``freq_mhz``. rcal version 1 (Alan mode) products
-    hold it as a ``(n, 2)`` table of (frequency, loss)."""
-    loss = info.get("hot_load_loss")
-    if loss is None:
+def _sig(x: Any, digits: int = 7) -> Optional[List[Optional[float]]]:
+    """A float array as a JSON list to ``digits`` significant digits (for
+    values far from 1, such as Q of the ambient load, ~5e-4)."""
+    if x is None:
         return None
-    loss = np.asarray(loss, dtype=np.float64)
-    if loss.ndim == 2 and loss.shape[1] == 2:
-        return np.interp(np.asarray(info["freq_mhz"], dtype=np.float64), loss[:, 0], loss[:, 1])
-    return loss if loss.ndim == 1 else None
+    return [float(f"{v:.{digits}g}") if math.isfinite(v) else None
+            for v in np.asarray(x, dtype=np.float64).ravel().tolist()]
 
 
 def calibration_json(cal: Any, info: Dict[str, Any], source: str) -> Dict[str, Any]:
     """Everything the page plots, at the product's resolution (3072 channels).
 
-    Temperatures are rounded to 0.1 mK, S11s and the loss to 1e-7.
-    ``source`` is ``"stored"`` or ``"computed"``.
+    Temperatures are rounded to 0.1 mK, S11s and the loss to 1e-7, Q to 7
+    significant digits. Per load: the calibrated and known temperatures, the
+    modelled S11, and (rcal version 3 and later; else None) the mean Q
+    spectrum used in the fit, its per-cycle variance and the receiver
+    (front-end) temperature during the spectrum (``frontend_c``: mean, min,
+    max in degC). ``source`` is ``"stored"`` or ``"computed"``.
     """
     t_load, t_load_ns = float(info["t_load"]), float(info["t_load_ns"])
     metrics = info.get("metrics") or {}
@@ -334,6 +360,9 @@ def calibration_json(cal: Any, info: Dict[str, Any], source: str) -> Dict[str, A
             "known": _arr(d.get("known"), 4),
             "s11_re": _arr(None if s11 is None else np.real(s11), 7),
             "s11_im": _arr(None if s11 is None else np.imag(s11), 7),
+            "q": _sig(d.get("q")),
+            "q_variance": _sig(d.get("q_variance"), 4),
+            "frontend_c": _plain(d.get("frontend_c")),
         }
 
     rcv = np.asarray(cal.receiver_s11)
@@ -358,7 +387,7 @@ def calibration_json(cal: Any, info: Dict[str, Any], source: str) -> Dict[str, A
         "config": _plain(info.get("config") or {}),
         "freq_mhz": _arr(info.get("freq_mhz"), 6),
         "loads": {n: load(n) for n in LOADS},
-        "hot_load_loss": _arr(_loss(info), 7),
+        "hot_load_loss": _arr(info.get("hot_load_loss"), 7),
         "nw": {
             "freq_mhz": _arr(cal.freqs.to_value("MHz"), 6),
             **{k: _arr(getattr(cal, k), 4) for k in ("Tsca", "Toff", "Tunc", "Tcos", "Tsin")},
@@ -406,3 +435,26 @@ def stored_json(
 def clear_cache() -> None:
     with _cache_lock:
         _cache.clear()
+    with _status_lock:
+        _status_cache.update(key=None, t=0.0, rows=None)
+
+
+def load_cycles(prod: Any, t0: float, t1: float) -> Dict[str, Any]:
+    """Per cycle of each calibration load in ``[t0, t1]`` (L1): the time, the
+    band-median Q (60-90 MHz) and the dropout/outlier flags."""
+    out: Dict[str, Any] = {}
+    for load in ("amb", "hot", "open", "short"):
+        try:
+            df = prod.l1_cycles(t0, t1, load=load)
+        except LookupError:
+            df = None
+        if df is None or df.empty:
+            out[load] = None
+            continue
+        df = df.sort_values("time_unix")
+        out[load] = {
+            "time_unix": _arr(df.time_unix, 1),
+            "band_median_q": _sig(df.band_median_q),
+            "flagged": [bool(a or b) for a, b in zip(df.dropout, df.outlier)],
+        }
+    return out
