@@ -632,7 +632,7 @@ def build_night(
     out["quicklook"] = _quicklook(prod, start, end, "ant", p0, max_rows, waterfall, probe_rfi=True)
     try:
         # clip=True adds *_window columns: metrics of the cycles in the night
-        l1 = prod.l1(start=start, end=end, load="ant", clip=True)
+        l1 = prod.l1(start=start, end=end, load="ant", clip=True, deployment=DEPLOYMENT)
     except LookupError:
         l1 = None
         notes.append("no L1 products yet")
@@ -640,7 +640,7 @@ def build_night(
     if l1 is not None:
         out["band"], missing = _band_series(l1, start, end)
         # per-cycle flags (stored, or recomputed for older products)
-        cycles = prod.l1_cycles(start, end, load="ant")
+        cycles = prod.l1_cycles(start, end, load="ant", deployment=DEPLOYMENT)
         dropout_times = _float_list(cycles.query("dropout").time_unix, 0)
         if missing:
             notes.append(f"unreadable L1 products: {', '.join(missing)}")
@@ -691,7 +691,7 @@ def status() -> dict[str, Any]:
                            "products_db": str(prod.settings.products_db)}
     for stage in ("ql", "l1"):
         try:
-            out[stage] = {k: _scalar(v) for k, v in prod.coverage(stage).items()}
+            out[stage] = {k: _scalar(v) for k, v in prod.coverage(stage, deployment=DEPLOYMENT).items()}
         except LookupError:
             out[stage] = None
         except (sqlite3.Error, OSError) as e:
@@ -768,7 +768,7 @@ def l1(start: str, end: str, load: str | None = "ant") -> dict[str, Any]:
     t0, t1 = _require_range(start, end)
     try:
         with _db_errors():
-            df = prod.l1(start=t0, end=t1, load=load or None)
+            df = prod.l1(start=t0, end=t1, load=load or None, deployment=DEPLOYMENT)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e)) from None
     drop = [c for c in ("path", "input_path", "t_start", "t_end") if c in df]

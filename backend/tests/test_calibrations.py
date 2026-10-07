@@ -81,3 +81,43 @@ def test_status_texts():
     assert "no calibration spectra" in calibrations.unavailable_reason(statuses, "2024_200")
     assert "boom" in calibrations.status_text("failed", "boom")
     assert calibrations.status_text("something_new") == "something_new"
+
+
+def test_day_statuses_are_served_while_refreshing(monkeypatch):
+    """Stale statuses are returned at once and refreshed in the background."""
+    import threading
+    import time
+
+    import pandas as pd
+
+    release = threading.Event()
+    calls = []
+
+    class Prod:
+        def config_hash(self, stage, config_hash=None):
+            return "h"
+
+        def calibration_days(self, deployment):
+            calls.append(deployment)
+            if len(calls) > 1:
+                release.wait(5)
+            status = "done" if len(calls) == 1 else "no_temperature"
+            return pd.DataFrame([{"cal_day": "2026_250", "status": status, "s11_session": None,
+                                  "issues": [], "error": None}])
+
+    calibrations.clear_cache()
+    prod = Prod()
+    assert calibrations.day_statuses(prod)["2026_250"]["status"] == "done"  # computed, waited
+    assert calls == ["edges3-mro"]
+    monkeypatch.setattr(calibrations, "STATUS_TTL_S", 0)
+    # stale: the old answer at once, one refresh started (and still running)
+    assert calibrations.day_statuses(prod)["2026_250"]["status"] == "done"
+    assert calibrations.day_statuses(prod)["2026_250"]["status"] == "done"
+    release.set()
+    for _ in range(100):
+        if calibrations._status_cache["rows"]["2026_250"]["status"] == "no_temperature":
+            break
+        time.sleep(0.02)
+    assert calibrations._status_cache["rows"]["2026_250"]["reason"].startswith("too few")
+    assert len(calls) == 2 and not calibrations._status_cache["refreshing"]
+    calibrations.clear_cache()

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import math
 import threading
 import time
@@ -47,7 +48,11 @@ except ImportError:  # optional: products_api.get_products() answers 503
         raise ValueError("edges-pipeline is not installed")
 
 
+log = logging.getLogger("edges.calibrations")
+
 LATEST = "Latest"
+#: The catalog holds other receivers too (EDGES-2): every query names this one.
+DEPLOYMENT = "edges3-mro"
 LOADS = ("ambient", "hot_load", "open", "short")
 
 #: What the pipeline's day statuses (``Products.calibration_days``) mean.
@@ -65,7 +70,8 @@ NOTE = (
     "Days with all four calibration loads are listed; there were none in 2024–2025. "
     "New days appear within about 12 hours of their data."
 )
-#: Day statuses are cached this long (computing them reads the catalog, ~3-7 s).
+#: Day statuses are refreshed after this long (computing them reads the
+#: catalog: ~25 s with EDGES-2 in it, 2026-10-07).
 STATUS_TTL_S = 10 * 60
 
 #: The settings the page offers, by section: (key, label, min, max, integer).
@@ -201,38 +207,72 @@ def status_text(status: str, error: str | None = None) -> str:
     return STATUS_TEXT.get(status, status)
 
 
-_status_cache: dict[str, Any] = {"key": None, "t": 0.0, "rows": None}
-_status_lock = threading.Lock()
+_status_cache: dict[str, Any] = {"key": None, "t": 0.0, "rows": None, "refreshing": False}
+_status_lock = threading.Lock()  # guards _status_cache
+_status_compute = threading.Lock()  # one computation at a time
+
+
+def _compute_statuses(prod: Any, h: str | None) -> dict[str, dict[str, Any]]:
+    if h is None:
+        return {}
+    rows = {}
+    for r in prod.calibration_days(deployment=DEPLOYMENT).to_dict("records"):
+        st = str(r["status"])
+        rows[str(r["cal_day"])] = {
+            "status": st,
+            "reason": None if st == "done" else status_text(st, r.get("error")),
+            "s11_session": r["s11_session"] if isinstance(r["s11_session"], str) else None,
+            "issues": [str(i) for i in (r.get("issues") or [])],
+        }
+    return rows
+
+
+def _refresh_statuses(prod: Any, h: str | None) -> dict[str, dict[str, Any]]:
+    try:
+        with _status_compute:
+            with _status_lock:  # someone else may have just done it
+                c = _status_cache
+                if c["rows"] is not None and c["key"] == h and time.time() - c["t"] < STATUS_TTL_S:
+                    return c["rows"]
+            rows = _compute_statuses(prod, h)
+            with _status_lock:
+                _status_cache.update(key=h, t=time.time(), rows=rows)
+            return rows
+    finally:
+        with _status_lock:
+            _status_cache["refreshing"] = False
+
+
+def _refresh_in_background(prod: Any, h: str | None) -> None:
+    try:
+        _refresh_statuses(prod, h)
+    except Exception:  # keep serving the old statuses; retried on a later request
+        log.exception("refreshing the calibration day statuses failed")
 
 
 def day_statuses(prod: Any) -> dict[str, dict[str, Any]]:
     """Every calibration day (all four loads) and what the pipeline made of it
     in the default configuration: ``status``, ``reason`` (None when done),
-    ``s11_session``, ``issues``. Cached for :data:`STATUS_TTL_S` (per default
-    configuration); one request computes it at a time."""
+    ``s11_session``, ``issues``.
+
+    Computing them reads the catalog (seconds to tens of seconds), so they are
+    cached per default configuration: after :data:`STATUS_TTL_S` the cached
+    ones are still returned while a background thread refreshes them. Only a
+    request with nothing cached for this configuration waits.
+    """
     try:
         h = prod.config_hash("rcal")
     except LookupError:
         h = None
     with _status_lock:
         c = _status_cache
-        if c["rows"] is not None and c["key"] == h and time.time() - c["t"] < STATUS_TTL_S:
+        if c["rows"] is not None and c["key"] == h:
+            if time.time() - c["t"] >= STATUS_TTL_S and not c["refreshing"]:
+                c["refreshing"] = True
+                threading.Thread(target=_refresh_in_background, args=(prod, h),
+                                 name="calibration-days", daemon=True).start()
             return c["rows"]
-        if h is None:
-            rows: dict[str, dict[str, Any]] = {}
-        else:
-            df = prod.calibration_days()
-            rows = {}
-            for r in df.to_dict("records"):
-                st = str(r["status"])
-                rows[str(r["cal_day"])] = {
-                    "status": st,
-                    "reason": None if st == "done" else status_text(st, r.get("error")),
-                    "s11_session": r["s11_session"] if isinstance(r["s11_session"], str) else None,
-                    "issues": [str(i) for i in (r.get("issues") or [])],
-                }
-        _status_cache.update(key=h, t=time.time(), rows=rows)
-        return rows
+    return _refresh_statuses(prod, h)
 
 
 def unavailable_reason(statuses: dict[str, dict[str, Any]], key: str) -> str:
@@ -246,7 +286,7 @@ def unavailable_reason(statuses: dict[str, dict[str, Any]], key: str) -> str:
 def stored_rows(prod: Any) -> list[dict[str, Any]]:
     """The stored default calibrations, oldest first (summary columns only)."""
     try:
-        df = prod.calibrations()
+        df = prod.calibrations(deployment=DEPLOYMENT)
     except LookupError:  # no rcal products at all yet
         return []
     cols = ["cal_day", "s11_session", "t_ambient_k", "t_hot_k", "rms_ambient_k",
@@ -278,7 +318,7 @@ def stored_row(prod: Any, key: str) -> dict[str, Any] | None:
 
 
 def product(prod: Any, key: str, config_hash: str,
-            deployment: str = "edges3-mro") -> dict[str, Any] | None:
+            deployment: str = DEPLOYMENT) -> dict[str, Any] | None:
     """The stored product of a day: ``path``, ``sha256`` (of the file) and
     ``input_key`` (of its inputs: it changes when the pipeline reprocesses
     the day because an input changed). None if there is none."""
@@ -407,7 +447,7 @@ _cache_lock = threading.Lock()
 
 
 def stored_json(
-    prod: Any, key: str, config_hash: str | None = None, deployment: str = "edges3-mro"
+    prod: Any, key: str, config_hash: str | None = None, deployment: str = DEPLOYMENT
 ) -> dict[str, Any]:
     """The stored calibration of a day as JSON; ``LookupError`` if there is none.
 
@@ -438,7 +478,7 @@ def clear_cache() -> None:
     with _cache_lock:
         _cache.clear()
     with _status_lock:
-        _status_cache.update(key=None, t=0.0, rows=None)
+        _status_cache.update(key=None, t=0.0, rows=None, refreshing=False)
 
 
 def load_cycles(prod: Any, t0: float, t1: float) -> dict[str, Any]:
@@ -447,7 +487,7 @@ def load_cycles(prod: Any, t0: float, t1: float) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for load in ("amb", "hot", "open", "short"):
         try:
-            df = prod.l1_cycles(t0, t1, load=load)
+            df = prod.l1_cycles(t0, t1, load=load, deployment=DEPLOYMENT)
         except LookupError:
             df = None
         if df is None or df.empty:
