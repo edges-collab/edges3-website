@@ -15,6 +15,7 @@ htmlcov/
 # ----- Virtualenvs / conda envs -----
 venv/
 .venv/
+.venv*/
 env/
 .env
 env.bak/

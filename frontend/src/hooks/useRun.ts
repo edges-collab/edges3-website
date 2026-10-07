@@ -1,7 +1,8 @@
 /**
- * Resolve a calibration/observation request in the catalog as its options
- * change, find an existing run with the same key (then show it at once),
- * start it on request, and poll while it is queued or running.
+ * Resolve a calibration/observation request as its options change, find an
+ * existing run with the same key (then show it at once), start it on
+ * request, and poll while it is queued or running. A resolve whose ``id`` is
+ * null (a stored calibration) has nothing to run.
  *
  * Every response is checked against the request it was made for, so a slow
  * answer for old options never replaces the current run; and the id returned
@@ -10,7 +11,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react"
 import { BASE_URL } from "../utils/baseURL"
-import type { Resolved, RunDetail, RunKind } from "../types/runs"
+import type { Resolvable, RunDetail, RunKind } from "../types/runs"
 
 class HttpError extends Error {
   status: number
@@ -37,9 +38,9 @@ const post = (body: unknown): RequestInit => ({
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
-export function useRun<I, R>(kind: RunKind, request: unknown) {
+export function useRun<V extends Resolvable, I, R>(kind: RunKind, request: unknown) {
   const key = JSON.stringify(request)
-  const [resolved, setResolved] = useState<{ key: string; value: Resolved<I> } | null>(null)
+  const [resolved, setResolved] = useState<{ key: string; value: V } | null>(null)
   const [detail, setDetail] = useState<{ key: string; value: RunDetail<I, R> } | null>(null)
   const [error, setError] = useState<{ key: string; message: string } | null>(null)
   const current = useRef(key) // the request the page shows now
@@ -81,11 +82,11 @@ export function useRun<I, R>(kind: RunKind, request: unknown) {
   useEffect(() => {
     current.current = key
     stopPolling()
-    call<Resolved<I>>(`/api/${kind}s/resolve`, post(JSON.parse(key)))
+    call<V>(`/api/${kind}s/resolve`, post(JSON.parse(key)))
       .then((v) => {
         if (current.current !== key) return
         setResolved({ key, value: v })
-        if (v.status) follow(key, v.id)
+        if (v.status && v.id) follow(key, v.id)
       })
       .catch((e: unknown) => {
         if (current.current === key) setError({ key, message: message(e) })

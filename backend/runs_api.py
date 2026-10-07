@@ -2,33 +2,44 @@
 Calibration and observation runs
 ================================
 
-Runs of ``run_single_day.py`` (see its docstring) as background jobs:
+Receiver calibrations come from edges-pipeline (see ``calibrations.py``): the
+stored default of a day is read directly (fast); other settings are computed
+by ``run_single_day.py --stage calibration`` (``rcal.calibrate_day``) as a
+background job. Nights are background jobs too. A request names a
+calibration by its day and settings, ``{"day": "2026_250", "params":
+{"fit": {"cterms": 7}}}``; when ``rcal.config_hash(params)`` is the
+pipeline's default the stored one is used, otherwise a computed one.
 
-* a **calibration** is keyed by its day, S11 session, parameters and the
-  versions of its input files;
+* a **calibration** job (non-default settings) is keyed by its day, the
+  configuration hash of its settings and the edges-pipeline version;
 * an **observation** (one night) is keyed by the night, the antenna S11
   session, its parameters, the calibration it uses and its input files.
 
 The key (a 16-hex-digit hash) names the run directory,
 ``$EDGES_OUTPUT_ROOT/<kind>/<id>/``, so an identical request finds the
 finished run instead of recomputing it. Each directory holds
-``request.json``, ``inputs.json`` (from ``catalog_inputs``), ``params.json``,
-``status.json`` (``queued``/``running``/``done``/``failed``), ``log.txt`` and,
-when done, ``result.json`` with ``plots.npz``/``waterfalls.npz`` (served under
+``request.json``, ``params.json``, ``status.json``
+(``queued``/``running``/``done``/``failed``), ``log.txt`` and, when done,
+``result.json``. A calibration also has ``rcal.h5`` (the solution); an
+observation ``inputs.json`` (from ``catalog_inputs``), ``calibration.json``
+(which solution) and ``plots.npz``/``waterfalls.npz`` (served under
 ``/data/<kind>/<id>/``).
 
-One worker thread runs the jobs one at a time (a calibration takes ~1 min,
-a night ~0.5 min), niced and with few threads, so the shared server is not
-overloaded. An observation whose calibration is not done yet queues the
-calibration first. Only the newest :data:`MAX_RUNS_PER_KIND` runs of each
-kind are kept.
+One worker thread runs the jobs one at a time (a calibration takes ~45 s and
+~2 GB, a night ~0.5 min), niced and with few threads, so the shared server is
+not overloaded. An observation whose computed calibration is not done yet
+queues the calibration first. Only the newest :data:`MAX_RUNS_PER_KIND` runs
+of each kind are kept.
 
 Endpoints (prefix ``/api``)
 ---------------------------
-GET  /calibrations/options          days and S11 sessions, default parameters
-POST /calibrations/resolve          inputs + id (+ status) of a calibration
-POST /calibrations                  start (or find) a calibration
-GET  /calibrations/{id}             status, inputs, result, log tail
+GET  /calibrations                  days (stored, and without one: why), the
+                                    settings form, other stored configurations
+GET  /calibrations/stored/{day}     a day's stored calibration (JSON, 3072
+                                    channels per array); ?config_hash= another
+POST /calibrations/resolve          stored or computed, and the job's id/status
+POST /calibrations                  start (or find) a computation
+GET  /calibrations/{id}             a computation: status, result, log tail
 GET  /observations/options          nights and antenna S11 sessions, defaults
 POST /observations/resolve          inputs + id (+ status) of an observation
 POST /observations                  start (or find) an observation
@@ -59,6 +70,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+import calibrations
 import catalog_inputs
 import config
 import products_api
@@ -69,7 +81,11 @@ router = APIRouter(prefix="/api", tags=["runs"])
 
 KINDS = ("calibration", "observation")
 MAX_RUNS_PER_KIND = 20
+#: Runs waiting at most (a calibration takes ~45 s and ~2 GB): more is a 503.
+MAX_QUEUED = 6
 RUN_TIMEOUT_S = 1800
+#: run_single_day.EXIT_CANNOT_CALIBRATE: the pipeline cannot calibrate the day.
+EXIT_CANNOT_CALIBRATE = 10
 _ID = re.compile(r"^[0-9a-f]{16}$")
 #: Never reuse a run whose inputs are younger than this (a file still being
 #: written makes the key change between requests).
@@ -77,41 +93,46 @@ _NEW_DIR_GRACE_S = 120
 _start_lock = threading.Lock()  # one start/retry at a time (FastAPI's threadpool)
 
 
-def code_version() -> str:
-    """The pipeline code and edges-analysis version: part of every run's key, so
-    a code change never reuses outputs of the old code."""
+def _dist_version(name: str) -> str:
+    """A package's version, with its git commit when installed from git."""
     try:
-        from importlib.metadata import version
+        from importlib.metadata import distribution
 
-        edges = version("edges-analysis")
+        dist = distribution(name)
+        commit = (json.loads(dist.read_text("direct_url.json") or "{}").get("vcs_info") or {}).get(
+            "commit_id", "")
+        return f"{dist.version}@{commit[:12]}" if commit else dist.version
     except Exception:
-        edges = "?"
-    try:
-        script = hashlib.sha256(Path(config.RUN_SCRIPT).read_bytes()).hexdigest()[:12]
-    except OSError:
-        script = "unknown"
-    return f"{script}+edges-{edges}"
+        return "?"
 
-#: Parameters of each stage: default and allowed range (must match
+
+def code_version() -> str:
+    """The stage code, edges-analysis and edges-pipeline versions: part of
+    every run's key, so a code change never reuses outputs of the old code."""
+    h = hashlib.sha256()
+    # the stage script, and the module that writes a calibration's result.json
+    for path in (Path(config.RUN_SCRIPT), Path(calibrations.__file__)):
+        try:
+            h.update(path.read_bytes())
+        except OSError:
+            h.update(b"unknown")
+    script = h.hexdigest()[:12]
+    return f"{script}+edges-{_dist_version('edges-analysis')}+pipeline-{_dist_version('edges-pipeline')}"
+
+#: Parameters of a night: default and allowed range (must match
 #: run_single_day.DEFAULT_PARAMS, which is not imported to keep this light).
+#: A calibration's settings are the pipeline's (``calibrations.clean_params``).
 PARAMS: Dict[str, Dict[str, Tuple[float, float, float, bool]]] = {
     #                name: (default, min, max, integer)
-    "calibration": {
-        "cterms": (6, 1, 30, True),
-        "wterms": (5, 1, 30, True),
-        "fstart": (40.0, 0.0, 200.0, False),
-        "fstop": (190.0, 0.0, 200.0, False),
-        "wfstart": (40.0, 0.0, 200.0, False),
-        "wfstop": (190.0, 0.0, 200.0, False),
-    },
     "observation": {
         "ant_s11_fstart": (58.0, 40.0, 200.0, False),
         "ant_s11_fstop": (105.0, 40.0, 200.0, False),
         "ant_s11_nterms": (12, 3, 30, True),
     },
 }
-_RANGES = {"calibration": (("fstart", "fstop"), ("wfstart", "wfstop")),
-           "observation": (("ant_s11_fstart", "ant_s11_fstop"),)}
+_RANGES = {"observation": (("ant_s11_fstart", "ant_s11_fstop"),)}
+#: Address-space limit of a calibration job (the pipeline's own, for the fit).
+CALIBRATION_MEM_LIMIT_GB = 6.0
 
 
 def _now() -> str:
@@ -175,18 +196,27 @@ def _digest(obj: Any) -> str:
     return hashlib.sha256(blob).hexdigest()[:16]
 
 
-def run_id(kind: str, inputs: Dict[str, Any], params: Dict[str, Any], calibration_id: Optional[str] = None) -> str:
-    """The run's key: what it computes from, including the input files' versions."""
+def run_id(inputs: Dict[str, Any], params: Dict[str, Any], calibration: Dict[str, Any]) -> str:
+    """A night's key: what it computes from, including the input files' versions
+    and the calibration (stored: its product; computed: its job)."""
     return _digest({
         "code": code_version(),
-        "kind": kind,
+        "kind": "observation",
         "dates": inputs["dates"],
         "params": params,
-        "calibration": calibration_id,
+        "calibration": calibration,
         "files": inputs["files"],
         "versions": inputs.get("file_versions"),
-        "temperatures": inputs.get("temperatures"),
     })
+
+
+def calibration_id(day: str, config_hash: str, inputs_key: Optional[str]) -> str:
+    """A computed calibration's key. The pipeline takes the inputs from the
+    catalog itself, so the day, the settings (their configuration hash), the
+    code and the inputs key of the day's stored product (which changes when
+    the pipeline reprocesses the day for new inputs) identify it."""
+    return _digest({"code": code_version(), "kind": "calibration", "day": day,
+                    "config_hash": config_hash, "inputs": inputs_key})
 
 
 @contextmanager
@@ -249,6 +279,10 @@ class _Queue:
                 "queued": [f"{k}/{i}" for k, i in self.pending],
             }
 
+    def n_pending(self) -> int:
+        with self.lock:
+            return len(self.pending)
+
     def is_active(self, kind: str, rid: str) -> bool:
         with self.lock:
             return (kind, rid) in self.active
@@ -296,17 +330,32 @@ def status_of(kind: str, rid: str) -> Optional[Dict[str, Any]]:
     return status
 
 
+def _limit_memory(gb: float) -> List[str]:
+    """A command prefix capping the child's address space (``ulimit -v``)."""
+    sh = shutil.which("sh")
+    if not sh:
+        return []
+    return [sh, "-c", 'ulimit -v "$0" && exec "$@"', str(int(gb * 2**20))]
+
+
 def _execute(kind: str, rid: str) -> None:
     d = _run_dir(kind, rid)
     request = _read(d / "request.json", {})
     cmd = [config.PYTHON, str(config.RUN_SCRIPT), "--stage", kind, "--run_dir", str(d),
-           "--inputs", str(d / "inputs.json"), "--params", str(d / "params.json")]
-    if kind == "observation":
-        cal_id = request["calibration_id"]
-        cal_status = status_of("calibration", cal_id) or {}
-        if cal_status.get("state") != "done":
-            raise RuntimeError(f"calibration {cal_id} is {cal_status.get('state', 'missing')}")
-        cmd += ["--calibration_dir", str(_run_dir("calibration", cal_id))]
+           "--params", str(d / "params.json")]
+    limit: List[str] = []
+    if kind == "calibration":
+        cmd += ["--day", request["day"]]
+        if request.get("catalog_db"):
+            cmd += ["--catalog_db", request["catalog_db"]]
+        limit = _limit_memory(CALIBRATION_MEM_LIMIT_GB)
+    else:
+        cal_id = request.get("calibration_id")
+        if cal_id:  # a computed calibration: it must have finished
+            cal_status = status_of("calibration", cal_id) or {}
+            if cal_status.get("state") != "done":
+                raise RuntimeError(f"calibration {cal_id} is {cal_status.get('state', 'missing')}")
+        cmd += ["--inputs", str(d / "inputs.json"), "--calibration", str(d / "calibration.json")]
     _set_status(kind, rid, "running")
     env = {**os.environ, "OMP_NUM_THREADS": "2", "MKL_NUM_THREADS": "2",
            "OPENBLAS_NUM_THREADS": "2", "PYTHONUNBUFFERED": "1"}
@@ -314,11 +363,15 @@ def _execute(kind: str, rid: str) -> None:
     with open(d / "log.txt", "w") as logf:
         try:
             proc = subprocess.run(
-                nice + cmd, stdout=logf, stderr=subprocess.STDOUT, env=env, timeout=RUN_TIMEOUT_S,
+                nice + limit + cmd, stdout=logf, stderr=subprocess.STDOUT, env=env,
+                timeout=RUN_TIMEOUT_S,
             )
         except subprocess.TimeoutExpired:
             _set_status(kind, rid, "failed", error=f"timed out after {RUN_TIMEOUT_S} s")
             return
+    if proc.returncode == EXIT_CANNOT_CALIBRATE and kind == "calibration":
+        _set_status(kind, rid, "failed", error=_tail(d, 1).removeprefix("[run] "))
+        return
     if proc.returncode != 0 or not (d / "result.json").exists():
         _set_status(kind, rid, "failed", error=f"exit {proc.returncode}: {_tail(d, 12)}")
         return
@@ -366,8 +419,9 @@ def _evict(kind: str) -> None:
     if kind == "calibration":
         obs_root = _root("observation")
         for p in (obs_root.iterdir() if obs_root.is_dir() else []):
-            status = _read(p / "status.json", {}) or {}
-            if status.get("state") in ("queued", "running"):
+            status = _read(p / "status.json")
+            # queued, running, or being created (no status yet)
+            if status is None or status.get("state") in ("queued", "running"):
                 keep.add((_read(p / "request.json", {}) or {}).get("calibration_id"))
     finished.sort(reverse=True)
     for _, p in finished[MAX_RUNS_PER_KIND:]:
@@ -379,8 +433,8 @@ def _evict(kind: str) -> None:
 # Creating runs
 # ---------------------------------------------------------------------------
 class CalibrationRequest(BaseModel):
-    cal: str = "Latest"
-    s11: str = "Latest"
+    day: str = "Latest"
+    #: the pipeline's settings, by section: {"fit": {"cterms": 7}}
     params: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -391,43 +445,125 @@ class ObservationRequest(BaseModel):
     calibration: CalibrationRequest = Field(default_factory=CalibrationRequest)
 
 
-def _prepare(kind: str, rid: str, inputs: Dict[str, Any], params: Dict[str, Any], request: Dict[str, Any]) -> None:
+def _prepare(kind: str, rid: str, files: Dict[str, Any]) -> None:
+    """Create the run directory with its JSON files (``name -> content``)."""
     d = _run_dir(kind, rid)
     if (d / "status.json").exists():
         return
     d.mkdir(parents=True, exist_ok=True)
-    _write(d / "request.json", request)
-    _write(d / "inputs.json", inputs)
-    _write(d / "params.json", params)
+    for name, payload in files.items():
+        _write(d / name, payload)
+
+
+@contextmanager
+def _pipeline():
+    """The products reader; missing packages/DB -> 503, bad settings -> 400."""
+    try:
+        with products_api._db_errors():
+            yield products_api.get_products()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
 
 def resolve_calibration(req: CalibrationRequest) -> Dict[str, Any]:
-    params = clean_params("calibration", req.params)
-    with _catalog() as cat:
-        inputs = catalog_inputs.resolve_calibration(cat, req.cal, req.s11)
-    rid = run_id("calibration", inputs, params)
-    return {"id": rid, "params": params, "inputs": inputs, "status": status_of("calibration", rid)}
+    """Which calibration a request means: the stored default of the day, or a
+    computation with these settings (with its job id and status).
+
+    ``params`` are overrides of the readers' default settings. ``stored`` is
+    the stored day's summary row; ``unavailable`` says why there is no
+    calibration to show (not an error here: the pages say so). Keys starting
+    with ``_`` are for the server only (:func:`_public`).
+    """
+    with _pipeline() as prod:
+        dflt = calibrations.default_config(prod)
+        params = calibrations.clean_params(req.params, dflt["config"])
+        settings = calibrations.effective(dflt["config"], params)
+        if req.day in (None, "", calibrations.LATEST):
+            try:
+                day = calibrations.latest_day(prod)
+            except LookupError as e:
+                raise HTTPException(status_code=404, detail=str(e)) from None
+        else:
+            day = calibrations.day_key(req.day)
+        h = dflt["hash"] if not params else calibrations.config_hash(settings)
+        stored = calibrations.product(prod, day, dflt["hash"]) if dflt["hash"] else None
+        out: Dict[str, Any] = {
+            "day": day, "params": params, "config_hash": h, "default_hash": dflt["hash"],
+            "is_default": h == dflt["hash"], "version_skew": dflt["skew"],
+            "pipeline": _dist_version("edges-pipeline"),
+            "stored": calibrations.stored_row(prod, day) if stored else None,
+            "_product": stored, "_settings": settings,
+            "_catalog_db": str(prod.settings.catalog_db),
+        }
+    if out["is_default"]:
+        return {**out, "source": "stored", "id": None, "status": None,
+                "unavailable": None if stored else calibrations.gap_reason(day)}
+    # a day without a stored calibration that no settings can calibrate: say
+    # so, and offer nothing to run
+    hopeless = None if stored else calibrations.hopeless(day)
+    if hopeless:
+        return {**out, "source": "computed", "id": None, "status": None, "unavailable": hopeless}
+    # the stored product's inputs key: a computation is redone when the
+    # pipeline reprocesses the day because its inputs changed
+    rid = calibration_id(day, h, (stored or {}).get("input_key"))
+    return {**out, "source": "computed", "id": rid, "status": status_of("calibration", rid),
+            "unavailable": None}
+
+
+def _public(d: Dict[str, Any]) -> Dict[str, Any]:
+    """A response without the server-only (``_``) keys, recursively."""
+    return {k: _public(v) if isinstance(v, dict) else v for k, v in d.items()
+            if not k.startswith("_")}
+
+
+def _start_calibration(cal: Dict[str, Any]) -> None:
+    _start("calibration", cal["id"], {
+        "request.json": {"day": cal["day"], "config_hash": cal["config_hash"],
+                         "overrides": cal["params"], "catalog_db": cal["_catalog_db"]},
+        "params.json": cal["_settings"],
+    })
+
+
+def _calibration_spec(cal: Dict[str, Any]) -> Dict[str, Any]:
+    """What an observation needs to load its calibration (``calibration.json``)."""
+    spec = {"cal_day": cal["day"], **{k: cal[k] for k in ("config_hash", "source", "id", "params")}}
+    if cal["source"] == "stored":
+        spec.update(path=cal["_product"]["path"], sha256=cal["_product"]["sha256"],
+                    s11_session=(cal["stored"] or {}).get("s11_session"))
+    else:
+        spec.update(path=str(_run_dir("calibration", cal["id"]) / "rcal.h5"), sha256=None,
+                    s11_session=None)
+    return spec
 
 
 def resolve_observation(req: ObservationRequest) -> Dict[str, Any]:
+    """A night's inputs and run id. If its calibration is unavailable, ``id``
+    is None (nothing to run) and ``calibration.unavailable`` says why."""
     cal = resolve_calibration(req.calibration)
     params = clean_params("observation", req.params)
     with _catalog() as cat:
         inputs = catalog_inputs.resolve_observation(cat, req.night, req.ant_s11)
-    rid = run_id("observation", inputs, params, cal["id"])
+    if cal["unavailable"]:
+        return {"id": None, "params": params, "inputs": inputs, "status": None,
+                "calibration": cal, "_spec": None}
+    spec = _calibration_spec(cal)
+    key = {k: spec[k] for k in ("cal_day", "config_hash", "source", "id", "sha256")}
+    rid = run_id(inputs, params, key)
     return {"id": rid, "params": params, "inputs": inputs,
-            "status": status_of("observation", rid), "calibration": cal}
+            "status": status_of("observation", rid), "calibration": cal, "_spec": spec}
 
 
-def _start(kind: str, resolved: Dict[str, Any], request: Dict[str, Any]) -> None:
-    rid = resolved["id"]
+def _start(kind: str, rid: str, files: Dict[str, Any]) -> None:
     with _start_lock:  # check, clean, prepare and submit as one step
         st = status_of(kind, rid)
         if st and st["state"] in ("done", "queued", "running"):
             return
+        if queue.n_pending() >= MAX_QUEUED:
+            raise HTTPException(status_code=503, detail=(
+                f"{MAX_QUEUED} runs are already waiting; try again when they have finished"))
         if st:  # failed or interrupted: retry from scratch
             shutil.rmtree(_run_dir(kind, rid), ignore_errors=True)
-        _prepare(kind, rid, resolved["inputs"], resolved["params"], request)
+        _prepare(kind, rid, files)
         queue.submit(kind, rid)
 
 
@@ -454,22 +590,56 @@ def _defaults(kind: str) -> Dict[str, Any]:
     return {k: v[0] for k, v in PARAMS[kind].items()}
 
 
-@router.get("/calibrations/options")
-def calibration_options() -> Dict[str, Any]:
-    with _catalog() as cat:
-        return {**catalog_inputs.calibration_options(cat), "defaults": _defaults("calibration")}
+@router.get("/calibrations")
+def calibration_list() -> Dict[str, Any]:
+    """Days with a stored calibration, catalog days without one (and why), the
+    settings form, and the other stored configurations (for comparison)."""
+    with _pipeline() as prod, _catalog() as cat:
+        dflt = calibrations.default_config(prod)
+        return {
+            **calibrations.day_list(prod, catalog_inputs.calibration_days(cat)),
+            **calibrations.form(dflt["config"]),
+            "default_hash": dflt["hash"],
+            "version_skew": dflt["skew"],
+            "other_configs": calibrations.other_configs(prod, dflt["hash"]),
+            "pipeline": _dist_version("edges-pipeline"),
+        }
+
+
+@router.get("/calibrations/stored/{day}")
+def calibration_stored(day: str, config_hash: Optional[str] = None) -> Dict[str, Any]:
+    """A day's stored calibration (default settings unless ``config_hash``)."""
+    if config_hash is not None and not re.fullmatch(r"[0-9a-f]{64}", config_hash):
+        raise HTTPException(status_code=400, detail="config_hash must be 64 hex digits")
+    with _pipeline() as prod, products_api._heavy_slot():
+        key = calibrations.day_key(day)
+        try:
+            return calibrations.stored_json(prod, key, config_hash)
+        except LookupError as e:
+            reason = calibrations.gap_reason(key) if config_hash is None else str(e)
+            raise HTTPException(status_code=404, detail=f"no stored calibration for {key}: {reason}") from None
+        except OSError as e:  # the product file (not the database): say so
+            log.warning("cannot read the stored calibration of %s: %s", key, e)
+            raise HTTPException(status_code=500, detail=(
+                f"the stored calibration of {key} cannot be read ({type(e).__name__})")) from None
 
 
 @router.post("/calibrations/resolve")
 def calibration_resolve(req: CalibrationRequest) -> Dict[str, Any]:
-    return resolve_calibration(req)
+    return _public(resolve_calibration(req))
 
 
 @router.post("/calibrations")
 def calibration_start(req: CalibrationRequest) -> Dict[str, Any]:
-    r = resolve_calibration(req)
-    _start("calibration", r, {"cal": req.cal, "s11": req.s11, "params": r["params"]})
-    return _describe("calibration", r["id"])
+    """Compute a calibration with non-default settings (the default is stored)."""
+    cal = resolve_calibration(req)
+    if cal["source"] == "stored":
+        raise HTTPException(status_code=400, detail=(
+            "these are the default settings: the stored calibration is used, nothing to compute"))
+    if cal["unavailable"]:
+        raise HTTPException(status_code=400, detail=f"cannot calibrate {cal['day']}: {cal['unavailable']}")
+    _start_calibration(cal)
+    return _describe("calibration", cal["id"])
 
 
 @router.get("/calibrations/{rid}")
@@ -485,18 +655,26 @@ def observation_options() -> Dict[str, Any]:
 
 @router.post("/observations/resolve")
 def observation_resolve(req: ObservationRequest) -> Dict[str, Any]:
-    return resolve_observation(req)
+    return _public(resolve_observation(req))
 
 
 @router.post("/observations")
 def observation_start(req: ObservationRequest) -> Dict[str, Any]:
     r = resolve_observation(req)
     cal = r["calibration"]
-    if (r["status"] or {}).get("state") != "done":  # a finished night needs nothing
-        _start("calibration", cal, {"cal": req.calibration.cal, "s11": req.calibration.s11,
-                                    "params": cal["params"]})
-    _start("observation", r, {"night": req.night, "ant_s11": req.ant_s11,
-                              "params": r["params"], "calibration_id": cal["id"]})
+    if cal["unavailable"]:
+        raise HTTPException(status_code=400, detail=(
+            f"no calibration for {cal['day']}: {cal['unavailable']}"))
+    done = (r["status"] or {}).get("state") == "done"
+    if cal["source"] == "computed" and not done:  # a finished night needs nothing
+        _start_calibration(cal)
+    _start("observation", r["id"], {
+        "request.json": {"night": req.night, "ant_s11": req.ant_s11, "params": r["params"],
+                         "calibration_id": cal["id"]},
+        "inputs.json": r["inputs"],
+        "params.json": r["params"],
+        "calibration.json": r["_spec"],
+    })
     return {**_describe("observation", r["id"]), "calibration_id": cal["id"]}
 
 

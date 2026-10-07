@@ -1,4 +1,4 @@
-"""Tests of the catalog-based calibration/observation inputs (see conftest)."""
+"""Tests of the catalog-based observation inputs (see conftest)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 import os
 
 import pytest
-from conftest import CAL_DATE, S11_GOOD, S11_LABELS, S11_OLD, T_A, T_B, T_C, UTC
+from conftest import CAL_DATE, CAL_DAY, S11_GOOD, S11_OLD, T_A, T_B, T_C, UTC
 
 import catalog_inputs
 import products_api
@@ -22,43 +22,26 @@ def cat(settings):
     products_api.configure(None)
 
 
-def test_calibration_options(cat):
-    d = catalog_inputs.calibration_options(cat)
-    assert d["calibration"] == [CAL_DATE]  # all four loads start that day
-    assert d["s11"] == [S11_OLD, S11_GOOD]
+def test_calibration_days(cat):
+    assert catalog_inputs.calibration_days(cat) == [CAL_DATE]  # all four loads start that day
 
 
-def test_resolve_calibration(cat):
-    inp = catalog_inputs.resolve_calibration(cat)  # Latest / Latest
-    json.dumps(inp, allow_nan=False)
-    assert inp["dates"] == {"cal": CAL_DATE, "s11": S11_GOOD}  # the catalog's pick
-    f = inp["files"]
-    assert f["amb"].endswith(f"mro/amb/2025/{CAL_DATE}_03_00_00_amb.acq")
-    assert f["short"].endswith(f"{CAL_DATE}_06_00_00_short.acq")
-    assert set(f["s11"]) == set(S11_LABELS)
-    t = inp["temperatures"]
-    # ambient: the .tmp snapshot (27 C), not the log (which has no reading then)
-    assert t["ambient"]["source"] == "snapshot"
-    assert t["ambient"]["temperature_k"] == pytest.approx(300.15)
-    # hot load: the log reading of probe 102 nearest the hot spectrum
-    assert t["hot"]["source"] == "templog" and t["hot"]["probe"] == 102
-    assert t["hot"]["temperature_c"] == pytest.approx(111.0)
-    assert inp["issues"] == []
-    assert all(v["live"] and v["catalog_sha256"] for v in inp["file_versions"].values())
-
-
-def test_resolve_calibration_issues(cat, monkeypatch):
-    inp = catalog_inputs.resolve_calibration(cat, CAL_DATE, S11_OLD)
-    assert any(f"S11 session {S11_OLD} chosen; the catalog recommends {S11_GOOD}" in i
-               for i in inp["issues"])
-    with pytest.raises(catalog_inputs.InputError):
-        catalog_inputs.resolve_calibration(cat, "2025_001")
-    with pytest.raises(catalog_inputs.InputError):
-        catalog_inputs.resolve_calibration(cat, CAL_DATE, "2020_001_00")
-    # "Auto" S11 needs a usable recommendation
-    monkeypatch.setattr(catalog_inputs, "recommended_s11", lambda cat, day: None)
-    with pytest.raises(catalog_inputs.InputError, match="choose one explicitly"):
-        catalog_inputs.resolve_calibration(cat)
+def test_probe_temperature(cat):
+    t_amb = CAL_DAY.timestamp() + 3 * 3600  # the ambient spectrum
+    # the .tmp snapshot (27 C), not the log (which has no reading then)
+    snap = catalog_inputs.probe_temperature(
+        cat, probe=100, context="amb", stamp_unix=t_amb, t_unix=t_amb, default_k=1.0)
+    assert snap["source"] == "snapshot" and snap["temperature_k"] == pytest.approx(300.15)
+    # the log reading of probe 102 nearest the hot spectrum
+    t_hot = t_amb + 3600
+    log = catalog_inputs.probe_temperature(
+        cat, probe=102, context="hot", stamp_unix=t_hot, t_unix=t_hot, default_k=1.0)
+    assert log["source"] == "templog" and log["temperature_c"] == pytest.approx(111.0)
+    # nothing within 15 min: the fallback
+    none = catalog_inputs.probe_temperature(
+        cat, probe=102, context="hot", stamp_unix=t_amb - 86400, t_unix=t_amb - 86400,
+        default_k=1.0)
+    assert none["source"] == "default" and none["temperature_k"] == 1.0
 
 
 @pytest.mark.parametrize(
@@ -98,7 +81,9 @@ def test_resolve_observation(cat):
     by_name = {f["name"]: f for f in inp["files"]["ant"]}
     a = by_name[T_A.strftime("2025_100_%H_%M_%S_ant.acq")]["temperatures"]
     assert a["obs_ambient"]["source"] == "templog"
-    assert a["obs_ambient"]["temperature_c"] == pytest.approx(25.0)
+    # probe 101, the ambient load (as the pipeline's calibration), not 100
+    assert a["obs_ambient"]["probe"] == 101
+    assert a["obs_ambient"]["temperature_c"] == pytest.approx(24.0)
     # the 12:00 file has no log reading within 15 min: shown as missing, no issue
     # (the antenna calibration needs no probe temperature)
     b = by_name[T_B.strftime("2025_100_%H_%M_%S_ant.acq")]["temperatures"]
@@ -143,21 +128,11 @@ def test_bin_rows_empty_bins():
 
 
 def test_file_versions_see_changes(cat):
-    inp = catalog_inputs.resolve_calibration(cat)
-    path = inp["files"]["amb"]
+    inp = catalog_inputs.resolve_observation(cat)
+    path = inp["files"]["ant"][0]["path"]
     st = os.stat(path)
-    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))  # (synthetic file)
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns - 10**9))  # (synthetic file)
     try:
-        assert catalog_inputs.resolve_calibration(cat)["file_versions"] != inp["file_versions"]
+        assert catalog_inputs.resolve_observation(cat)["file_versions"] != inp["file_versions"]
     finally:
         os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
-
-
-def test_align_s11_grids_uses_given_files(cat, tmp_path):
-    rsd = pytest.importorskip("run_single_day")
-    inp = catalog_inputs.resolve_calibration(cat)
-    shadow, warn = rsd.align_s11_grids(list(inp["files"]["s11"].values()), S11_GOOD, tmp_path)
-    assert warn == []
-    assert sorted(p.name for p in shadow.iterdir()) == sorted(
-        f"{S11_GOOD}_{label}.s1p" for label in S11_LABELS
-    )  # only this session's files; nothing written next to the raw data

@@ -3,29 +3,21 @@ Calibration and observation inputs from the EDGES catalog
 =========================================================
 
 Everything here is a read-only query of the catalog (``edges-catalog``); the
-site never scans the raw data tree or merges temperature-log files. There
-are two kinds of run (see ``runs_api.py``):
+site never scans the raw data tree or merges temperature-log files.
 
-* a **calibration** (receiver calibration from one UTC day's calibration
-  spectra and a full S11 session): :func:`calibration_options`,
-  :func:`resolve_calibration`;
-* an **observation** (one night of antenna spectra, calibrated with a
-  calibration, and an antenna S11 session): :func:`observation_options`,
-  :func:`resolve_observation`.
+* An **observation** (one night of antenna spectra and an antenna S11
+  session; see ``runs_api.py``): :func:`observation_options`,
+  :func:`resolve_observation` return a JSON-serialisable ``inputs`` dict with
+  the exact files, their versions and ``issues``. ``"Latest"`` is the latest
+  night with antenna data, and the antenna S11 session nearest before it.
+* **Calibration days** (:func:`calibration_days`), only to say which days
+  have no stored receiver calibration. The calibration itself, inputs
+  included, is edges-pipeline's (``calibrations.py``).
 
-Each ``resolve_*`` returns a JSON-serialisable ``inputs`` dict with the exact
-files, their versions, the probe temperatures and ``issues`` (everything
-that would stop or weaken the run). ``"Latest"`` choices are resolved here:
-the latest calibration day, the S11 session ``Catalog.calibration_inputs``
-recommends for it, the latest night with antenna data, and the antenna S11
-session nearest before the night.
-
-Temperatures come from ``Catalog.housekeeping`` data (de-duplicated, without
-logs of other receivers). For each spectrum, in order: the ``.tmp`` snapshot
-of that load written at the hour of the file's time stamp; else the
-temperature-log reading of *that probe* nearest to the spectrum's first
-cycle, within :data:`TEMPLOG_TOLERANCE_S`; else the fallback constant, with an
-issue.
+The ambient-load temperature at each antenna file is shown for information
+(the calibration of the antenna needs none): the ``.tmp`` snapshot written at
+the hour of the file's time stamp, else the temperature-log reading of the
+probe nearest to the file's first cycle, within :data:`TEMPLOG_TOLERANCE_S`.
 """
 
 from __future__ import annotations
@@ -97,17 +89,6 @@ def _session_files(cat: Any, sessions, stem: str, what: str) -> Dict[str, str]:
         raise InputError(f"No {what} S11 session {stem!r} in the catalog")
     s11 = cat.s11_files(int(match.id.iloc[-1]))
     return dict(zip(s11.label, s11.path))
-
-
-def _check_root(files: Dict[str, str], root: str, what: str) -> List[str]:
-    off_root = [p for p in files.values() if os.path.dirname(p) != root.rstrip("/")]
-    if not off_root:
-        return []
-    # alancal_edges3 and the antenna S11 read <root>/<stem>_*.s1p
-    return [
-        f"{len(off_root)} {what} S11 files are not in the spectra root {root};"
-        " the calibration reads the copies there"
-    ]
 
 
 # ---------------------------------------------------------------------------
@@ -245,72 +226,6 @@ def calibration_days(cat: Any) -> List[str]:
     return sorted(d for d, loads in days.items() if len(loads) == len(CAL_LOADS))
 
 
-def calibration_options(cat: Any) -> Dict[str, List[str]]:
-    """What the Calibrations tab offers (sorted, oldest first)."""
-    return {"calibration": calibration_days(cat), "s11": sorted(set(_s11_sessions(cat).stem))}
-
-
-def recommended_s11(cat: Any, cal_date: str) -> Optional[str]:
-    """Stem of the S11 session ``Catalog.calibration_inputs`` picks for a day."""
-    ci = cat.calibration_inputs(cal_date, deployment=DEPLOYMENT)
-    o = ((ci.get("s11") or {}).get("files") or {}).get("O")
-    return os.path.basename(o)[: -len("_O.s1p")] if o else None
-
-
-def resolve_calibration(cat: Any, cal: str = LATEST, s11: str = LATEST) -> Dict[str, Any]:
-    """Inputs of one receiver calibration (``cal``: ``YYYY_DDD``; ``s11``: stem)."""
-    opts = calibration_options(cat)
-    if cal in (None, "", LATEST):
-        if not opts["calibration"]:
-            raise InputError("No calibration days available")
-        cal = opts["calibration"][-1]
-    elif cal not in opts["calibration"]:
-        raise InputError(f"Unknown calibration day: {cal!r}")
-    suggested = recommended_s11(cat, cal)
-    if s11 in (None, "", LATEST):
-        if suggested is None or suggested not in opts["s11"]:
-            raise InputError(
-                f"No usable full S11 session near calibration day {cal}: choose one explicitly"
-            )
-        s11 = suggested
-    elif s11 not in opts["s11"]:
-        raise InputError(f"Unknown S11 session: {s11!r}")
-
-    ci = cat.calibration_inputs(cal, deployment=DEPLOYMENT)
-    issues: List[str] = list(ci["issues"])
-    if suggested != s11:
-        # the catalog's S11 remarks are about its own pick, not this one
-        issues = [i for i in issues if not i.startswith("no full S11 session")]
-        issues.append(
-            f"S11 session {s11} chosen; the catalog recommends {suggested or 'none'}"
-            f" for calibration day {cal}"
-        )
-    files: Dict[str, Any] = {}
-    for load in CAL_LOADS:
-        paths = ci["spectra"].get(load) or []
-        files[load] = paths[0] if paths else None
-    files["s11"] = _session_files(cat, _s11_sessions(cat), s11, "full")
-    root = ci.get("root") or str(config.RAW_DATA_ROOT)
-    issues += _check_root(files["s11"], root, "calibration")
-    temps = _temperatures(cat, [
-        ("ambient", files["amb"], "amb", config.PROBE_AMBIENT, config.TCOLD_FALLBACK_K),
-        ("hot", files["hot"], "hot", config.PROBE_HOT, config.THOT_FALLBACK_K),
-    ], issues)
-    return {
-        "kind": "calibration",
-        "dates": {"cal": cal, "s11": s11},
-        "root": root,
-        "files": files,
-        "file_versions": _file_versions(
-            cat, [files[k] for k in CAL_LOADS] + list(files["s11"].values())
-        ),
-        "temperatures": temps,
-        "hk_coverage": ci.get("hk_coverage"),
-        "recommended_s11": suggested,
-        "issues": issues,
-    }
-
-
 # ---------------------------------------------------------------------------
 # Observations (nights)
 # ---------------------------------------------------------------------------
@@ -407,9 +322,9 @@ def resolve_observation(cat: Any, night: str = LATEST, ant_s11: str = LATEST) ->
             issues.append(f"{os.path.basename(r.path)} is still being written: left out")
             continue
         # the ambient probe at each file (for information; the calibration of
-        # the antenna needs no probe temperature, see run_single_day.T_LOAD)
+        # the antenna needs no probe temperature)
         temps = _temperatures(cat, [
-            ("obs_ambient", r.path, "ant", config.PROBE_AMBIENT, config.TCOLD_FALLBACK_K),
+            ("obs_ambient", r.path, "ant", config.PROBE_AMBIENT, config.AMBIENT_FALLBACK_K),
         ], [])
         ant_files.append({
             "path": r.path,

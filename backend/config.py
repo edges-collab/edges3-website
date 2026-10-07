@@ -16,14 +16,15 @@ Environment variables (all optional):
   EDGES_BEAM_FACTOR_FILE    Path to the EDGES-3 antenna beam factor file
                              (``e3_beam_factor.hickle``). Required for the
                              absolute temperature calibration.
-  EDGES_PROBE_AMBIENT       Temperature-log code for ambient cal (default 100)
-  EDGES_PROBE_HOT           Temperature-log code for hot cal     (default 102)
+  EDGES_PROBE_AMBIENT       Temperature-log code of the ambient load, shown per
+                             antenna file for information (default 101)
   EDGES_PROBE_COLD_LOAD     Code 152 = pr59_current, NOT a temperature
                              (informational only; default 152)
 
-Input files, S11 sessions and temperature readings come from the catalog
-(``catalog_inputs.py``); nothing scans the raw data tree or merges
-temperature-log files any more.
+Receiver calibrations, their inputs and load temperatures included, are
+edges-pipeline's (``calibrations.py``); the observation inputs come from the
+catalog (``catalog_inputs.py``). Nothing scans the raw data tree or merges
+temperature-log files.
 
 The pipeline is user-triggered only — there is no daemon, no scheduler,
 no systemd unit. The backend runs under ``uvicorn`` and the frontend is
@@ -143,25 +144,19 @@ PYTHON: str = _detect_python()
 
 
 # ---------------------------------------------------------------------------
-# Calibration temperature probes
+# Temperature probes
 # ---------------------------------------------------------------------------
-# The pipeline auto-derives every per-load calibration temperature from
-# the temperature log. There are no user-tunable setpoints anymore —
-# whatever the probe says is what the EDGES receiver calibration sees,
-# which in turn is what ``calibrated_temps.txt`` reports back.
-#
 # Probe numbers are the codes of the on-site temperature log (catalog
 # ``hk_code``): 100 front_end_temperature, 101 amb_load_temperature,
 # 102 hot_load_temperature, 103 inner_box_temperature (degC); 106
 # thermal_control; 150 battery_voltage (V); 152 pr59_current; 0 the
-# thermal setpoint. Override with EDGES_PROBE_* if needed.
+# thermal setpoint.
 #
-# OPEN QUESTION (to confirm with the team): the ambient-load calibration
-# uses code 100, which the catalog and edges-analysis call the *front end*
-# temperature; code 101 is the ambient load. Kept at 100 for now so results
-# are unchanged; see README "Open questions".
-PROBE_AMBIENT: float = float(os.environ.get("EDGES_PROBE_AMBIENT", "100"))
-PROBE_HOT: float = float(os.environ.get("EDGES_PROBE_HOT", "102"))
+# The receiver calibration's probes are edges-pipeline settings
+# (``[temperatures] ambient_code`` 101, ``hot_code`` 102; the Calibrations
+# page can change them). The site only shows the ambient-load reading at
+# each antenna file, with the same probe as the pipeline by default.
+PROBE_AMBIENT: float = float(os.environ.get("EDGES_PROBE_AMBIENT", "101"))
 # Code 152 is pr59_current (edges-analysis), NOT a temperature. The site
 # does not use it for any calibration; it is kept only for information.
 PROBE_COLD_LOAD: float = float(os.environ.get("EDGES_PROBE_COLD_LOAD", "152"))
@@ -186,11 +181,8 @@ ALLOWED_ORIGINS: List[str] = [
     if o.strip()
 ]
 
-# Fallback values used when no probe reading is found at the calibration
-# time. These are NOT exposed as env vars — they're internal constants.
-TCOLD_FALLBACK_K = 306.5
-THOT_FALLBACK_K = 393.22
-TCAB_FALLBACK_K = 306.5
+# Shown (as "–") when no ambient-load reading is found near an antenna file.
+AMBIENT_FALLBACK_K = 306.5
 
 
 # ---------------------------------------------------------------------------
@@ -210,11 +202,7 @@ def describe() -> str:
         f"BEAM_FACTOR_FILE   = {BEAM_FACTOR_FILE}\n"
         f"OUTPUT_ROOT        = {OUTPUT_ROOT}\n"
         f"PYTHON             = {PYTHON}\n"
-        f"TCOLD_FALLBACK_K   = {TCOLD_FALLBACK_K} K\n"
-        f"THOT_FALLBACK_K    = {THOT_FALLBACK_K} K\n"
-        f"TCAB_FALLBACK_K    = {TCAB_FALLBACK_K} K\n"
-        f"PROBE_AMBIENT      = {PROBE_AMBIENT}\n"
-        f"PROBE_HOT          = {PROBE_HOT}\n"
+        f"PROBE_AMBIENT      = {PROBE_AMBIENT} (information only)\n"
         f"PROBE_COLD_LOAD    = {PROBE_COLD_LOAD} (pr59_current, not a temperature)\n"
     )
 

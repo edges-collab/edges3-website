@@ -1,19 +1,24 @@
 /**
- * The calibration selected on the Calibrations tab. The Detailed Data View
- * uses it by default, so both tabs agree. Kept in localStorage per browser.
+ * The calibration selected on the Calibrations tab: a day and the pipeline
+ * settings that differ from the default (none: the stored calibration). The
+ * Detailed Data View uses it, so both tabs agree. Kept in localStorage per
+ * browser (a selection saved in an older format is dropped).
  */
 import { createContext, useContext, useState, type ReactNode } from "react"
 import type { CalibrationRequest } from "../types/runs"
 
-const KEY = "edges.calibration"
-const DEFAULT: CalibrationRequest = { cal: "Latest", s11: "Latest", params: {} }
+const KEY = "edges.calibration.v2"
+const DEFAULT: CalibrationRequest = { day: "Latest", params: {} }
+
+const isSettings = (p: unknown): boolean =>
+  !!p && typeof p === "object" && !Array.isArray(p) &&
+  Object.values(p).every((s) => !!s && typeof s === "object" && !Array.isArray(s) &&
+    Object.values(s).every((v) => typeof v === "number"))
 
 function load(): CalibrationRequest {
   try {
     const v = JSON.parse(window.localStorage.getItem(KEY) ?? "null")
-    if (v && typeof v.cal === "string" && typeof v.s11 === "string" && typeof v.params === "object") {
-      return v as CalibrationRequest
-    }
+    if (v && typeof v.day === "string" && isSettings(v.params)) return v as CalibrationRequest
   } catch {
     // unavailable or corrupt storage: use the default
   }

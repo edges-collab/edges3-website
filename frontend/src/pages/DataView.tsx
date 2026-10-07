@@ -1,20 +1,23 @@
 /**
  * Detailed Data View: choose a night, the antenna S11 session and its fit
- * window in the left panel; the calibration is the one selected on the
- * Calibrations tab (run first if needed). The night's plots appear on the
- * right.
+ * window in the left panel; the receiver calibration is the one selected on
+ * the Calibrations tab (the stored pipeline calibration of a day, or one
+ * computed with other settings, which runs first if needed). The night's
+ * plots appear on the right.
  */
 import { useSearchParams } from "react-router"
 import { Link } from "react-router"
 import { useCalibration } from "../state/CalibrationContext"
 import { useRun } from "../hooks/useRun"
+import { useJson } from "../hooks/useJson"
 import { Issues, NumberField, RunStatusBox, SelectField } from "../components/RunControls"
 import ObservationPlots from "../components/ObservationPlots"
-import { useOptions } from "./Calibrations"
-import type { CalibrationInputs, ObservationInputs, ObservationRequest, ObservationResult, Resolved } from "../types/runs"
+import type {
+  CalibrationResolved, ObservationInputs, ObservationRequest, ObservationResult, Resolved,
+} from "../types/runs"
 
 type Options = { nights: string[]; antenna_s11: string[]; defaults: Record<string, number> }
-type ObsResolved = Resolved<ObservationInputs> & { calibration: Resolved<CalibrationInputs> }
+type ObsResolved = Resolved<ObservationInputs> & { calibration: CalibrationResolved }
 
 const PARAMS: [string, string, number?][] = [
   ["ant_s11_fstart", "Antenna S11 fit from [MHz]", 1],
@@ -38,10 +41,10 @@ export default function DataView() {
     else n.set(k, v)
     setQ(n)
   }
-  const { options, error: optError } = useOptions<Options>("/api/observations/options")
+  const { data: options, error: optError } = useJson<Options>("/api/observations/options")
   const request: ObservationRequest = { night, ant_s11: antS11, params, calibration }
-  const { resolved, detail, error, start } = useRun<ObservationInputs, ObservationResult>("observation", request)
-  const r = resolved as ObsResolved | null
+  const { resolved: r, detail, error, start } =
+    useRun<ObsResolved, ObservationInputs, ObservationResult>("observation", request)
   const inputs = r?.inputs
   const cal = r?.calibration
   const param = (k: string) => params[k] ?? options?.defaults[k] ?? 0
@@ -70,14 +73,20 @@ export default function DataView() {
         <div className="small">
           {cal ? (
             <>
-              {cal.inputs.dates.cal}, S11 {cal.inputs.dates.s11}{" "}
-              <span className="text-muted">
-                (cterms {cal.params.cterms}, wterms {cal.params.wterms}, {cal.params.fstart}–{cal.params.fstop} MHz)
+              {cal.day}{cal.stored ? `, S11 ${cal.stored.s11_session}` : ""}{" "}
+              <span className={`badge ${cal.source === "stored" ? "text-bg-primary" : "text-bg-warning"}`}>
+                {cal.source === "stored" ? "stored" : "computed"}
               </span>
               <div className="text-muted">
-                {cal.status?.state === "done" ? "ready" : "not run yet: runs first (~1 min)"} ·{" "}
-                <Link to="/calibrations">change on the Calibrations tab</Link>
+                config <code>{cal.config_hash.slice(0, 12)}</code>
+                {cal.source === "computed" && (cal.status?.state === "done" ? " · ready" : " · not computed yet: runs first (~45 s)")}
+                {" · "}<Link to="/calibrations">change on the Calibrations tab</Link>
               </div>
+              {cal.unavailable && (
+                <div className="alert alert-warning py-1 px-2 mt-1 mb-0">
+                  No calibration for {cal.day}: {cal.unavailable}. Choose another day on the Calibrations tab.
+                </div>
+              )}
             </>
           ) : "…"}
         </div>
@@ -89,11 +98,13 @@ export default function DataView() {
               Night <strong>{inputs.night.date}</strong>: {inputs.files.ant.length} antenna files; S11{" "}
               <strong>{inputs.dates.ant_s11}</strong>
             </div>
-            <div className="mt-2"><Issues issues={[...(cal?.inputs.issues ?? []).map((i) => `calibration: ${i}`), ...inputs.issues]} /></div>
+            <div className="mt-2"><Issues issues={inputs.issues} /></div>
           </div>
         )}
-        <RunStatusBox status={r?.status ?? null} detail={detail} onRun={start}
-          what="Night" seconds={cal?.status?.state === "done" ? "~30 s" : "~1.5 min"} />
+        {!cal?.unavailable && (
+          <RunStatusBox status={r?.status ?? null} detail={detail} onRun={start}
+            what="Night" seconds={cal?.source === "computed" && cal.status?.state !== "done" ? "~1.5 min" : "~30 s"} />
+        )}
       </aside>
 
       <section className="flex-grow-1" style={{ minWidth: 0 }}>
@@ -103,7 +114,9 @@ export default function DataView() {
           <div className="text-muted p-4 border rounded">
             {detail && (detail.status.state === "queued" || detail.status.state === "running")
               ? "Processing the night; its plots will appear here."
-              : r
+              : cal?.unavailable
+                ? `There is no receiver calibration for ${cal.day} (${cal.unavailable}): choose another day on the Calibrations tab.`
+                : r
                 ? "This night has not been processed with these options yet: click Run on the left."
                 : "Resolving the night's inputs in the catalog…"}
           </div>
