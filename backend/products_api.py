@@ -13,7 +13,8 @@ Endpoints
 GET /api/status            Whether the products are available, and their coverage
 GET /api/nights/latest     UTC bounds of the night containing the latest QL data
 GET /api/night             Everything the "Last night" page needs, in one request
-GET /api/quicklook         QL waterfalls for a time range
+                           (?waterfall=median|mean|max: how Q is binned)
+GET /api/quicklook         QL waterfalls for a time range (?waterfall=median|mean|max)
 GET /api/l1                Per-file L1 QA metrics for a time range
 GET /api/housekeeping      Temperature-log readings for a time range
 
@@ -95,6 +96,11 @@ HOUSEKEEPING_GAP_S = 20 * 60
 
 MAX_SPAN_DAYS = 8
 MAX_SPAN_DAYS_P0 = 2  # the p0 waterfall doubles the payload
+#: The Q waterfalls of the QL products, by how each 0.5 MHz bin combines its
+#: ~80 channels: the median hides narrowband RFI; the mean and the max (QL
+#: version 3 and later) keep it. The max sits ~0.014 above the median (noise).
+Q_WATERFALLS = {"median": "waterfall_q", "mean": "waterfall_q_mean", "max": "waterfall_q_max"}
+WATERFALL_PATTERN = "^(median|mean|max)$"
 MAX_ROWS_LIMIT = 5000
 DEFAULT_MAX_ROWS = 2000
 
@@ -361,14 +367,39 @@ def _data_version(prod: Any) -> Tuple:
 # ---------------------------------------------------------------------------
 # Payload builders
 # ---------------------------------------------------------------------------
-def _quicklook(prod: Any, t0: float, t1: float, load: str, p0: bool, max_rows: int) -> Dict[str, Any]:
-    quantities = ("waterfall_q", "waterfall_p0") if p0 else ("waterfall_q",)
+def _quicklook(
+    prod: Any, t0: float, t1: float, load: str, p0: bool, max_rows: int,
+    waterfall: str = "median", probe_rfi: bool = False,
+) -> Dict[str, Any]:
+    """The QL waterfalls of a range. ``waterfall_q`` is the Q waterfall binned
+    by ``waterfall`` (:data:`Q_WATERFALLS`); products without that one (QL
+    before version 3) fall back to the median, with ``waterfall_note``.
+    ``rfi_waterfalls`` says whether the mean/max exist (known when one was
+    requested, or with ``probe_rfi``, which also loads the mean)."""
+    key = Q_WATERFALLS[waterfall]
+    extra = (key,) if key != "waterfall_q" else ("waterfall_q_mean",) if probe_rfi else ()
+    p0q = ("waterfall_p0",) if p0 else ()
+    note = None
     try:
-        # Decimation never averages across a gap; ``segment`` labels the runs.
-        ql = prod.quicklook(
-            t0, t1, load=load, quantities=quantities, deployment=DEPLOYMENT,
-            max_rows=max_rows,
-        )
+        try:
+            # Decimation never averages across a gap; ``segment`` labels the runs.
+            ql = prod.quicklook(
+                t0, t1, load=load, quantities=("waterfall_q", *extra, *p0q),
+                deployment=DEPLOYMENT, max_rows=max_rows,
+            )
+            rfi = bool(extra) or None
+        except KeyError:  # products older than QL version 3
+            if not extra:
+                raise
+            ql = prod.quicklook(
+                t0, t1, load=load, quantities=("waterfall_q", *p0q),
+                deployment=DEPLOYMENT, max_rows=max_rows,
+            )
+            rfi = False
+            if key != "waterfall_q":
+                note = (f"the {waterfall}-binned waterfall needs QL version 3 products,"
+                        " not yet available here: showing the median")
+                waterfall, key = "median", "waterfall_q"
     except LookupError as e:
         return {"available": False, "reason": str(e), "n_rows": 0}
     cov = ql["coverage"]
@@ -380,6 +411,7 @@ def _quicklook(prod: Any, t0: float, t1: float, load: str, p0: bool, max_rows: i
             and cov["t_first_unix"] <= t1 and cov["t_last_unix"] >= t0
         )
         reason = "no data in this range" if processed else "not processed (outside QL coverage)"
+    quantities = (key, *p0q)
     t, cols = insert_gaps(
         ql["time_unix"],
         {"lst_hour": ql["lst_hour"], **{q: ql[q] for q in quantities}},
@@ -394,7 +426,10 @@ def _quicklook(prod: Any, t0: float, t1: float, load: str, p0: bool, max_rows: i
         "lst_hour": _float_list(cols["lst_hour"], 5),
         "freq_mhz": _float_list(ql["freq_mhz"], 4),
         "freq_edges_mhz": _float_list(ql["freq_edges_mhz"], 4),
-        "waterfall_q": _encode_f32(cols["waterfall_q"]) if n else None,
+        "waterfall_q": _encode_f32(cols[key]) if n else None,
+        "waterfall_stat": waterfall,
+        "waterfall_note": note,
+        "rfi_waterfalls": rfi,
         "waterfall_p0": _encode_f32(cols["waterfall_p0"]) if n and p0 else None,
         "decimation": int(ql["decimation"]),
         "files": [os.path.basename(p) for p in ql["files"]],
@@ -585,12 +620,16 @@ def _badges(row: Dict[str, Any], longest: int, failed: bool) -> List[Dict[str, s
     return b
 
 
-def build_night(prod: Any, start: float, end: float, p0: bool = False, max_rows: int = DEFAULT_MAX_ROWS) -> Dict[str, Any]:
+def build_night(
+    prod: Any, start: float, end: float, p0: bool = False, max_rows: int = DEFAULT_MAX_ROWS,
+    waterfall: str = "median",
+) -> Dict[str, Any]:
     """Everything the night page shows, from precomputed products only."""
     tic = time.perf_counter()
     notes: List[str] = []
     out: Dict[str, Any] = {"night": _night_info(start, end, _latest_night(prod))}
-    out["quicklook"] = _quicklook(prod, start, end, "ant", p0, max_rows)
+    # probe_rfi: the page offers the RFI-keeping waterfalls only if they exist
+    out["quicklook"] = _quicklook(prod, start, end, "ant", p0, max_rows, waterfall, probe_rfi=True)
     try:
         # clip=True adds *_window columns: metrics of the cycles in the night
         l1 = prod.l1(start=start, end=end, load="ant", clip=True)
@@ -675,6 +714,8 @@ def night(
     date: Optional[str] = Query(None, description="Local date of the night's evening (YYYY-MM-DD); default: latest"),
     p0: bool = Query(False, description="Also return the p0 waterfall"),
     max_rows: int = Query(DEFAULT_MAX_ROWS, ge=10, le=MAX_ROWS_LIMIT),
+    waterfall: str = Query("median", pattern=WATERFALL_PATTERN,
+                           description="How Q is binned: median (hides RFI), mean or max (keep it)"),
 ) -> Dict[str, Any]:
     prod = get_products()
     if date:
@@ -691,12 +732,12 @@ def night(
         if latest is None:
             raise HTTPException(status_code=404, detail="no quick-look products yet")
         start, end = latest
-    key = ("night", start, p0, max_rows, _data_version(prod))
+    key = ("night", start, p0, max_rows, waterfall, _data_version(prod))
     hit = _cache.get(key)
     if hit is not None:
         return hit
     with _heavy_slot(), _db_errors():
-        payload = build_night(prod, start, end, p0=p0, max_rows=max_rows)
+        payload = build_night(prod, start, end, p0=p0, max_rows=max_rows, waterfall=waterfall)
     if not payload.get("degraded"):  # don't keep a transient failure for 15 min
         _cache.put(key, payload)
     return payload
@@ -709,6 +750,7 @@ def quicklook(
     load: str = "ant",
     p0: bool = False,
     max_rows: int = Query(DEFAULT_MAX_ROWS, ge=10, le=MAX_ROWS_LIMIT),
+    waterfall: str = Query("median", pattern=WATERFALL_PATTERN),
 ) -> Dict[str, Any]:
     prod = get_products()
     t0, t1 = _require_range(start, end)
@@ -717,7 +759,7 @@ def quicklook(
             status_code=400, detail=f"p0 ranges are limited to {MAX_SPAN_DAYS_P0} days"
         )
     with _heavy_slot(), _db_errors():
-        return _quicklook(prod, t0, t1, load, p0, max_rows)
+        return _quicklook(prod, t0, t1, load, p0, max_rows, waterfall)
 
 
 @router.get("/l1")

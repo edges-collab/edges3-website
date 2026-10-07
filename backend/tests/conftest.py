@@ -9,7 +9,8 @@ The night of 2025-04-10 at the MRO (18:00-06:00 AWST = 10:00-22:00 UTC) has:
 - ``A`` 10:30 UTC, 40 cycles, one cycle at ADC full scale;
 - ``B`` 12:00 UTC, 40 cycles (a ~1 h gap after ``A``), cycle 7 an antenna
   dropout (p0 below p1, so Q < 0);
-- ``C`` 13:00 UTC, 10 cycles (a short file);
+- ``C`` 13:00 UTC, 10 cycles (a short file), with a narrowband RFI line
+  (:data:`RFI_CHANNEL`);
 - ``bad`` 14:00 UTC, catalogued, then its first entry garbled in place
   (read_acq cannot decode it: no products);
 - ``day`` 2025-04-11 05:00 UTC (13:00 AWST), 5 cycles: daytime data after
@@ -66,6 +67,9 @@ S11_LABELS = (
 CYCLE_S = 23
 #: Settings of the second stored rcal configuration.
 ALT_PARAMS = {"fit": {"cterms": 9}}
+#: A narrowband RFI line in file C (119.92 MHz): its QL bin has 3 channels,
+#: so the median hides it and the mean and max keep it.
+RFI_CHANNEL = 614
 
 
 def _age(path: Path, hours: float = 5) -> None:
@@ -79,7 +83,7 @@ def _acq_name(t: datetime) -> str:
 
 def write_acq(
     root: Path, start: datetime, ncycles: int, seed: int = 0, clip_cycle=None,
-    dropout_cycle=None, load: str = "ant",
+    dropout_cycle=None, load: str = "ant", rfi_channel=None,
 ) -> Path:
     from read_acq import encode
 
@@ -88,6 +92,8 @@ def write_acq(
     p1 = np.tile((1 + f / 200) * 1e-9, (ncycles, 1))
     p2 = p1 * 2
     p0 = p1 * (1.5 + 0.01 * rng.standard_normal((ncycles, NFREQ)))
+    if rfi_channel is not None:  # a narrowband line: Q = 19 in one channel
+        p0[:, rfi_channel] = p1[:, rfi_channel] * 20
     if dropout_cycle is not None:
         p0[dropout_cycle] = p1[dropout_cycle] * 0.5
     t = [start + timedelta(seconds=CYCLE_S * i) for i in range(ncycles)]
@@ -223,7 +229,7 @@ def build_env(tmp: Path):
     root = tmp / "MRO"
     write_acq(root, T_A, 40, clip_cycle=5)
     write_acq(root, T_B, 40, seed=1, dropout_cycle=7)
-    write_acq(root, T_C, 10, seed=2)
+    write_acq(root, T_C, 10, seed=2, rfi_channel=RFI_CHANNEL)
     write_acq(root, T_DAY, 5, seed=3)
     bad = write_acq(root, T_BAD, 10, seed=4)
 

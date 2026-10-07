@@ -2,7 +2,9 @@
  * "Last night at a glance": one Plotly figure whose strips share a
  * site-local time axis (zooming one zooms all):
  *
- *   waterfall (Q or log10 p0) vs frequency, with LST on the top axis
+ *   waterfall (Q or log10 p0) vs frequency, with LST on the top axis;
+ *                          optionally minus each channel's median over the
+ *                          night (``relative``: RFI and changes stand out)
  *   events                 (antenna dropouts from L1; ADC full-scale hits
  *                           and data drops from the catalog)
  *   band-median Q          (L1)
@@ -31,11 +33,24 @@ const MUTED = "#52514e"
 type Props = {
   data: NightPayload
   quantity: "q" | "p0"
+  /** subtract each channel's median over the night (diverging colours) */
+  relative?: boolean
+}
+
+/** Each column minus its NaN-median over the rows. */
+function minusChannelMedian(rows: number[][]): number[][] {
+  const n = rows[0]?.length ?? 0
+  const med = new Array<number>(n)
+  for (let j = 0; j < n; j++) {
+    const col = rows.map((r) => r[j]).filter(Number.isFinite).sort((a, b) => a - b)
+    med[j] = col.length ? col[Math.floor((col.length - 1) / 2)] : NaN
+  }
+  return rows.map((r) => r.map((v, j) => v - med[j]))
 }
 
 type Strip = { key: string; weight: number; title: string; log?: boolean }
 
-export default function NightFigure({ data, quantity }: Props) {
+export default function NightFigure({ data, quantity, relative = false }: Props) {
   const off = data.night.utc_offset_hours
   const ql = data.quicklook
   const hk = useMemo(
@@ -48,8 +63,13 @@ export default function NightFigure({ data, quantity }: Props) {
     if (!enc || !ql.time_unix) return null
     let rows: number[][] = decodeRows(enc).map((r) => Array.from(r))
     if (quantity === "p0") rows = rows.map((r) => r.map((v) => (v > 0 ? Math.log10(v) : NaN)))
-    return { rows, range: robustRange(rows) }
-  }, [ql, quantity])
+    if (!relative) return { rows, range: robustRange(rows) }
+    rows = minusChannelMedian(rows)
+    const r = robustRange(rows, 0.005, 0.995)
+    const m = r ? Math.max(Math.abs(r[0]), Math.abs(r[1])) : null
+    return { rows, range: m ? ([-m, m] as [number, number]) : null }
+  }, [ql, quantity, relative])
+  const zName = (quantity === "q" ? "Q" : "log₁₀ p0") + (relative ? " − channel median" : "")
 
   const strips: Strip[] = [
     { key: "wf", weight: 4, title: "Frequency [MHz]" },
@@ -127,21 +147,22 @@ export default function NightFigure({ data, quantity }: Props) {
       transpose: true,
       xaxis: "x",
       yaxis: "y",
-      colorscale: "Viridis",
+      colorscale: relative ? "RdBu" : "Viridis",
+      reversescale: relative,
       zmin: wf.range?.[0],
       zmax: wf.range?.[1],
       zsmooth: false,
       showscale: true,
       showlegend: false,
       colorbar: {
-        title: { text: quantity === "q" ? "Q" : "log₁₀ p0", side: "right" },
+        title: { text: zName, side: "right" },
         y: (d0 + d1) / 2,
         len: d1 - d0,
         x: 1.02,
         thickness: 12,
       },
       hovertemplate:
-        `%{x}<br>%{y:.1f} MHz<br>${quantity === "q" ? "Q" : "log₁₀ p0"} = %{z:.4g}<extra></extra>`,
+        `%{x}<br>%{y:.1f} MHz<br>${zName} = %{z:.4g}<extra></extra>`,
     })
     const ticks = lstTicks(ql.time_unix, ql.lst_hour ?? [])
     L.xaxis2 = {

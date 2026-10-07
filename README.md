@@ -209,7 +209,11 @@ Four tabs:
   (18:00–06:00 AWST) from the precomputed quick-look and L1 products: a Q
   (or log p0) waterfall against site time with LST on the top axis, antenna
   dropouts and ADC/data-drop events, band-median Q and band power,
-  housekeeping, and a per-file QA table with badges. **Previous/Next** and
+  housekeeping, and a per-file QA table with badges. The Q waterfall's
+  0.5 MHz bins are the median of their ~80 channels by default, which hides
+  narrowband RFI; **Q mean** and **Q max** keep it (QL version 3 products),
+  and **minus each channel's median** shows changes and RFI against the
+  night's typical spectrum. **Previous/Next** and
   the date picker choose other nights (`/?date=YYYY-MM-DD`, named by the
   local date of the evening). The badge thresholds are provisional (see
   `QA_THRESHOLDS` in `backend/products_api.py`).
