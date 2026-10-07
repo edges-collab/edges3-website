@@ -13,6 +13,10 @@ Routers
                    computed with other settings as a background job) and
                    nights calibrated with them (background jobs)
 
+``browse_api``     /api/browse/... — a receiver's raw data from the catalog
+                   (first EDGES-2 low2): coverage, files, cycles, raw S11,
+                   weather
+
 Other endpoints
 ---------------
 GET  /health                 Liveness probe
@@ -45,6 +49,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import browse_api  # noqa: E402
 import config  # noqa: E402
 import products_api  # noqa: E402
 import runs_api  # noqa: E402
@@ -72,6 +77,7 @@ app.add_middleware(
 # Both routers need edges-catalog and edges-pipeline; without them they
 # return 503 with an install hint.
 app.include_router(products_api.router)
+app.include_router(browse_api.router)
 app.include_router(runs_api.router)
 
 

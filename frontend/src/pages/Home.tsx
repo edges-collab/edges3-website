@@ -31,6 +31,7 @@ export default function Home() {
           <li><Link to="/">Nightly Overview</Link>: the latest night at a glance, from precomputed quick-look and L1 products.</li>
           <li><Link to="/calibrations">Calibrations</Link>: a day's receiver calibration, stored by the pipeline (or computed with other settings).</li>
           <li><Link to="/data">Detailed Data View</Link>: one night calibrated with the selected calibration.</li>
+          <li><Link to="/raw">Raw Data</Link>: an EDGES-2 receiver's record from the catalog (low2 so far).</li>
         </ul>
       </div>
       <div className="border rounded p-3">

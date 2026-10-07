@@ -247,6 +247,14 @@ Four tabs:
   calibration band), the antenna calibration (a, b and calibrated
   temperature, within the antenna S11 fit window), the antenna S11 (model
   and measurement) and, on demand, Q and T_cal waterfalls.
+* **Raw Data** (`/raw`, EDGES-2 low2 and low2-128k so far): a receiver's
+  whole record from the catalog alone, per UTC day (hours of data, or
+  files before spectrum extraction; GB; S11 sessions; data drops; largest
+  ADC value). Zoom in to two months or less, or click a day, for the range:
+  each spectrum file's span, the S11 sessions and the site's weather, a
+  file table (click a file for its per-cycle ADC extremes and data drops)
+  and the S11 sessions (click one for its raw, uncalibrated |S11| and phase).
+  No spectra are read: EDGES-2 has no quick-look products yet.
 * **Status** (`/status`): whether the data packages work, and what the
   job queue is doing.
 
@@ -265,12 +273,13 @@ request is never recomputed; the newest 20 of each kind are kept.
 | `backend/backend_api.py` | FastAPI app — routers, status, static-file mount, SPA fallback |
 | `backend/products_api.py` | Read-only `/api/night` etc. over the catalog and pipeline products (Nightly Overview) |
 | `backend/runs_api.py` | Calibration / observation runs as background jobs (`/api/calibrations`, `/api/observations`) |
+| `backend/browse_api.py` | The Raw Data page's `/api/browse/...`: a receiver's record, files, cycles, raw S11 and weather, from the catalog |
 | `backend/catalog_inputs.py` | Dates, nights, input files, S11 sessions and probe temperatures, from the catalog (nothing scans the raw tree) |
 | `backend/run_single_day.py` | The EDGES pipeline: `--stage calibration` and `--stage observation` |
 | `backend/tests/` | pytest tests on a small synthetic catalog |
 | `backend/requirements.txt` | Every Python dep, installed via `uv pip install` |
 | `frontend/` | React + Vite SPA |
-| `frontend/src/pages/` | `LastNight` (Nightly Overview), `Calibrations`, `DataView`, `Home` (Status) |
+| `frontend/src/pages/` | `LastNight` (Nightly Overview), `Calibrations`, `DataView`, `Browse` (Raw Data), `Home` (Status) |
 | `frontend/src/components/StackedPlot.tsx` | Multi-panel figures sharing an x axis |
 | `frontend/src/state/CalibrationContext.tsx` | The calibration selected on the Calibrations tab (shared with the Data View) |
 | `frontend/src/utils/baseURL.ts` | Where the frontend reads `VITE_API_URL` from |

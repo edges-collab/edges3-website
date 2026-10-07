@@ -5,6 +5,7 @@ import Home from "./pages/Home.tsx"
 import LastNight from "./pages/LastNight.tsx"
 import Calibrations from "./pages/Calibrations.tsx"
 import DataView from "./pages/DataView.tsx"
+import Browse from "./pages/Browse.tsx"
 
 import NavBar from "./components/NavBar.tsx"
 import { CalibrationProvider } from "./state/CalibrationContext.tsx"
@@ -19,6 +20,7 @@ function App() {
             <Route path="/" element={<LastNight />} />
             <Route path="/calibrations" element={<Calibrations />} />
             <Route path="/data" element={<DataView />} />
+            <Route path="/raw" element={<Browse />} />
             <Route path="/status" element={<Home />} />
             {/* old addresses */}
             <Route path="/Select" element={<Navigate to="/calibrations" replace />} />
