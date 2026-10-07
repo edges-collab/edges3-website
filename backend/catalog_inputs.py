@@ -24,8 +24,8 @@ probe nearest to the file's first cycle, within :data:`TEMPLOG_TOLERANCE_S`.
 from __future__ import annotations
 
 import os
-from datetime import date, datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import UTC, date, datetime
+from typing import Any
 
 import config
 import products_api
@@ -50,10 +50,10 @@ def open_catalog() -> Any:
     return products_api._open_catalog(products_api.get_products())
 
 
-def _iso(t_unix: Optional[float]) -> Optional[str]:
+def _iso(t_unix: float | None) -> str | None:
     if t_unix is None:
         return None
-    return datetime.fromtimestamp(t_unix, timezone.utc).isoformat()
+    return datetime.fromtimestamp(t_unix, UTC).isoformat()
 
 
 def _nan_to_none(v: Any) -> Any:
@@ -63,7 +63,7 @@ def _nan_to_none(v: Any) -> Any:
 # ---------------------------------------------------------------------------
 # S11 sessions
 # ---------------------------------------------------------------------------
-def _s11_sessions(cat: Any, kinds: Tuple[str, ...] = ("full",)):
+def _s11_sessions(cat: Any, kinds: tuple[str, ...] = ("full",)):
     """Averaged S11 sessions (``kinds``: ``full`` and/or ``antenna``) at the root
     of the tree, with their file-name stems."""
     df = cat.sql(
@@ -79,18 +79,18 @@ def _s11_sessions(cat: Any, kinds: Tuple[str, ...] = ("full",)):
     return df
 
 
-def _session_files(cat: Any, sessions, stem: str, what: str) -> Dict[str, str]:
+def _session_files(cat: Any, sessions, stem: str, what: str) -> dict[str, str]:
     match = sessions[sessions.stem == stem]
     if match.empty:
         raise InputError(f"No {what} S11 session {stem!r} in the catalog")
     s11 = cat.s11_files(int(match.id.iloc[-1]))
-    return dict(zip(s11.label, s11.path))
+    return dict(zip(s11.label, s11.path, strict=True))
 
 
 # ---------------------------------------------------------------------------
 # File versions and temperatures
 # ---------------------------------------------------------------------------
-def _file_versions(cat: Any, paths: List[str]) -> Dict[str, Any]:
+def _file_versions(cat: Any, paths: list[str]) -> dict[str, Any]:
     """Version of every input: catalog sha256 and live size/mtime (dedup key)."""
     paths = [p for p in paths if p]
     if not paths:
@@ -99,7 +99,7 @@ def _file_versions(cat: Any, paths: List[str]) -> Dict[str, Any]:
         f"SELECT path, sha256 FROM v_file WHERE path IN ({','.join('?' * len(paths))})",
         tuple(paths),
     )
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     for r in df.itertuples():
         try:  # the file now (metadata only), in case it changed since the catalog update
             st = os.stat(r.path)
@@ -110,7 +110,7 @@ def _file_versions(cat: Any, paths: List[str]) -> Dict[str, Any]:
     return out
 
 
-def _file_times(cat: Any, paths: List[str]) -> Dict[str, Dict[str, Optional[float]]]:
+def _file_times(cat: Any, paths: list[str]) -> dict[str, dict[str, float | None]]:
     """``path -> {stamp_unix, t_start_unix}`` (file-name stamp, first cycle)."""
     paths = [p for p in paths if p]
     if not paths:
@@ -135,11 +135,11 @@ def probe_temperature(
     stamp_unix: float,
     t_unix: float,
     default_k: float,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Probe reading for one spectrum: snapshot, else nearest log reading, else default."""
     code = int(probe)
     hour = stamp_unix - stamp_unix % 3600
-    entry: Dict[str, Any] = {
+    entry: dict[str, Any] = {
         "probe": probe,
         "time": _iso(t_unix),
         "reading_time": None,
@@ -176,11 +176,11 @@ def probe_temperature(
 
 
 def _temperatures(
-    cat: Any, lookups: List[Tuple[str, Optional[str], str, float, float]], issues: List[str]
-) -> Dict[str, Any]:
+    cat: Any, lookups: list[tuple[str, str | None, str, float, float]], issues: list[str]
+) -> dict[str, Any]:
     """``lookups``: (name, spectrum path, snapshot context, probe, fallback K)."""
     times = _file_times(cat, [p for _, p, *_ in lookups])
-    temps: Dict[str, Any] = {}
+    temps: dict[str, Any] = {}
     for name, path, context, probe, default_k in lookups:
         ft = times.get(path) if path else None
         if ft is None:
@@ -208,7 +208,7 @@ def _temperatures(
 # ---------------------------------------------------------------------------
 # Calibrations
 # ---------------------------------------------------------------------------
-def full_s11_sessions(cat: Any) -> List[str]:
+def full_s11_sessions(cat: Any) -> list[str]:
     """Stems of the full (calibration) S11 sessions, oldest first."""
     return sorted(set(_s11_sessions(cat, ("full",)).stem))
 
@@ -216,7 +216,7 @@ def full_s11_sessions(cat: Any) -> List[str]:
 # ---------------------------------------------------------------------------
 # Observations (nights)
 # ---------------------------------------------------------------------------
-def _night_dates_of(t0: float, t1: float) -> List[str]:
+def _night_dates_of(t0: float, t1: float) -> list[str]:
     """Nights (local evening dates) that the interval ``[t0, t1]`` overlaps."""
     out = []
     start, _ = products_api.Products.night(float(t0), deployment=DEPLOYMENT)
@@ -230,7 +230,7 @@ def _night_dates_of(t0: float, t1: float) -> List[str]:
     return out
 
 
-def observation_options(cat: Any) -> Dict[str, List[str]]:
+def observation_options(cat: Any) -> dict[str, list[str]]:
     """Nights with antenna spectra, and antenna S11 sessions (sorted, oldest first)."""
     sp = cat.sql(
         "SELECT t_start_unix, t_end_unix FROM v_spectra WHERE load = 'ant'"
@@ -239,13 +239,13 @@ def observation_options(cat: Any) -> Dict[str, List[str]]:
         (DEPLOYMENT,),
     )
     nights = set()
-    for t0, t1 in zip(sp.t_start_unix, sp.t_end_unix):
+    for t0, t1 in zip(sp.t_start_unix, sp.t_end_unix, strict=True):
         nights.update(_night_dates_of(float(t0), float(t1)))
     stems = sorted(set(_s11_sessions(cat, ("full", "antenna")).stem))
     return {"nights": sorted(nights), "antenna_s11": stems}
 
 
-def recommended_ant_s11(cat: Any, night_start: float) -> Optional[str]:
+def recommended_ant_s11(cat: Any, night_start: float) -> str | None:
     """The antenna S11 session nearest before the night's end (else the first after)."""
     sessions = _s11_sessions(cat, ("full", "antenna"))
     if sessions.empty:
@@ -255,7 +255,7 @@ def recommended_ant_s11(cat: Any, night_start: float) -> Optional[str]:
     return str(best.stem)
 
 
-def resolve_observation(cat: Any, night: str = LATEST, ant_s11: str = LATEST) -> Dict[str, Any]:
+def resolve_observation(cat: Any, night: str = LATEST, ant_s11: str = LATEST) -> dict[str, Any]:
     """Inputs of one night's observation (``night``: local evening date YYYY-MM-DD)."""
     opts = observation_options(cat)
     if night in (None, "", LATEST):
@@ -266,7 +266,7 @@ def resolve_observation(cat: Any, night: str = LATEST, ant_s11: str = LATEST) ->
         raise InputError(f"No antenna data for the night of {night!r}")
     start, end = products_api.Products.night(date.fromisoformat(night), deployment=DEPLOYMENT)
 
-    issues: List[str] = []
+    issues: list[str] = []
     sp = cat.sql(
         "SELECT path, t_start_unix, t_end_unix, n_cycles FROM v_spectra"
         " WHERE load = 'ant' AND status = 'present' AND category = 'science'"
@@ -299,7 +299,7 @@ def resolve_observation(cat: Any, night: str = LATEST, ant_s11: str = LATEST) ->
         )
 
     ant_files = []
-    now = datetime.now(timezone.utc).timestamp()
+    now = datetime.now(UTC).timestamp()
     for r in sp.itertuples():
         try:
             fresh = now - os.stat(r.path).st_mtime < SETTLE_S

@@ -1,0 +1,10 @@
+# Ruff (lint) settings for the backend; run by pre-commit (.pre-commit-config.yaml).
+target-version = "py312"
+line-length = 120
+extend-exclude = ["frontend", "outputs"]
+# the backend imports its modules top-level (it is put on sys.path)
+src = ["backend", "backend/tests"]
+
+[lint]
+# pyflakes, pycodestyle errors, import order, and a few bug-prone patterns
+select = ["E4", "E7", "E9", "F", "I", "B", "UP"]

@@ -36,7 +36,7 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -48,7 +48,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402
 import products_api  # noqa: E402
 import runs_api  # noqa: E402
-
 
 log = logging.getLogger("edges.api")
 
@@ -77,12 +76,12 @@ app.include_router(runs_api.router)
 
 
 @app.get("/health")
-def health() -> Dict[str, Any]:
+def health() -> dict[str, Any]:
     return {"ok": True, "time": datetime.now().isoformat()}
 
 
 @app.get("/pipeline/status")
-def pipeline_status() -> Dict[str, Any]:
+def pipeline_status() -> dict[str, Any]:
     return {
         "data_packages": products_api.IMPORT_ERROR is None,
         "data_packages_error": products_api.IMPORT_ERROR,

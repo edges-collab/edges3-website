@@ -37,8 +37,6 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import List
-
 
 # ---------------------------------------------------------------------------
 # Repo root: <repo>/  (this file is backend/config.py)
@@ -171,7 +169,7 @@ PROBE_COLD_LOAD: float = float(os.environ.get("EDGES_PROBE_COLD_LOAD", "152"))
 # SSH tunnel) are always permitted via the middleware's origin regex; add
 # any real frontend host with EDGES_ALLOWED_ORIGINS (comma-separated),
 # e.g. ``EDGES_ALLOWED_ORIGINS=https://edges.example.com``.
-ALLOWED_ORIGINS: List[str] = [
+ALLOWED_ORIGINS: list[str] = [
     o.strip()
     for o in os.environ.get(
         "EDGES_ALLOWED_ORIGINS",

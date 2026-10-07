@@ -368,6 +368,16 @@ the night (one at a time):
 
 ## Development workflow
 
+### Lint (pre-commit)
+
+`.pre-commit-config.yaml` runs ruff (`ruff.toml`) on the backend and a few
+file-hygiene checks; pre-commit.ci runs the same on every push. Run them
+before committing (or install them as a git hook with `pre-commit install`):
+
+```bash
+uvx pre-commit run --all-files
+```
+
 ### Tests
 
 They build a tiny synthetic field mirror in a temporary directory, ingest

@@ -25,7 +25,7 @@ function DataPlot() {
   style={{
     width: "90%",
     height: "90%",
-    
+
   }}
   />
 </div>

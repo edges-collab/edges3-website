@@ -38,7 +38,7 @@ from __future__ import annotations
 import os
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -51,7 +51,7 @@ pytest.importorskip("edges_pipeline")
 pytest.importorskip("edges_catalog")
 
 NFREQ = 1024
-UTC = timezone.utc
+UTC = UTC
 NIGHT = "2025-04-10"
 T_A = datetime(2025, 4, 10, 10, 30, 0, tzinfo=UTC)
 T_B = datetime(2025, 4, 10, 12, 0, 0, tzinfo=UTC)

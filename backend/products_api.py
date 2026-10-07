@@ -42,8 +42,8 @@ import os
 import sqlite3
 import threading
 import time
-from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import UTC, date, datetime, timedelta, timezone
+from typing import Any
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, Query
@@ -52,7 +52,7 @@ try:
     from edges_catalog import Catalog
     from edges_pipeline.products import SITE_UTC_OFFSET_HOURS, Products
 
-    IMPORT_ERROR: Optional[str] = None
+    IMPORT_ERROR: str | None = None
 except ImportError as _e:  # the data packages are optional
     Catalog = Products = None  # type: ignore[assignment,misc]
     SITE_UTC_OFFSET_HOURS = {"edges3-mro": 8.0}
@@ -68,7 +68,7 @@ SITE_TZ_NAME = "AWST"
 
 #: Housekeeping quantities shown on the night page (catalog names), with labels.
 #: Code 152 (``pr59_current``) and 0 (``setpoint``) are deliberately left out.
-HOUSEKEEPING_NAMES: Dict[str, str] = {
+HOUSEKEEPING_NAMES: dict[str, str] = {
     "hot_load_temperature": "Hot load",
     "amb_load_temperature": "Ambient load",
     "front_end_temperature": "Front end",
@@ -77,7 +77,7 @@ HOUSEKEEPING_NAMES: Dict[str, str] = {
 }
 
 #: Per-file QA thresholds for the badges (provisional; tune with the team).
-QA_THRESHOLDS: Dict[str, float] = {
+QA_THRESHOLDS: dict[str, float] = {
     # |ADC max/min| at or above this is a full-scale hit (full scale is 0.5).
     "adc_full_scale": 0.499,
     # A file with fewer cycles than this fraction of the night's longest file.
@@ -178,7 +178,7 @@ def _site_tz() -> timezone:
     return timezone(timedelta(hours=SITE_UTC_OFFSET_HOURS[DEPLOYMENT]))
 
 
-def _parse_time(value: Optional[str], name: str) -> Optional[float]:
+def _parse_time(value: str | None, name: str) -> float | None:
     """POSIX seconds or an ISO string (naive = UTC) -> POSIX seconds."""
     if value is None or value == "":
         return None
@@ -193,11 +193,11 @@ def _parse_time(value: Optional[str], name: str) -> Optional[float]:
             status_code=400, detail=f"{name} must be POSIX seconds or ISO time"
         ) from None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt.timestamp()
 
 
-def _require_range(start: Optional[str], end: Optional[str]) -> Tuple[float, float]:
+def _require_range(start: str | None, end: str | None) -> tuple[float, float]:
     t0, t1 = _parse_time(start, "start"), _parse_time(end, "end")
     if t0 is None or t1 is None:
         raise HTTPException(status_code=400, detail="start and end are required")
@@ -210,7 +210,7 @@ def _require_range(start: Optional[str], end: Optional[str]) -> Tuple[float, flo
     return t0, t1
 
 
-def _float_list(x: Any, digits: Optional[int] = None) -> List[Optional[float]]:
+def _float_list(x: Any, digits: int | None = None) -> list[float | None]:
     """Array -> JSON-safe list (NaN/inf -> None), optionally rounded."""
     a = np.asarray(x, dtype=float)
     if digits is not None:
@@ -238,7 +238,7 @@ def _scalar(v: Any) -> Any:
     return v
 
 
-def _encode_f32(a: np.ndarray) -> Dict[str, Any]:
+def _encode_f32(a: np.ndarray) -> dict[str, Any]:
     a = np.ascontiguousarray(a, dtype="<f4")
     return {
         "dtype": "float32",
@@ -256,10 +256,10 @@ def _gap_positions(t: np.ndarray, max_gap: float) -> np.ndarray:
 
 def insert_gaps(
     t: np.ndarray,
-    columns: Dict[str, np.ndarray],
-    segment: Optional[np.ndarray] = None,
+    columns: dict[str, np.ndarray],
+    segment: np.ndarray | None = None,
     factor: float = GAP_FACTOR,
-) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
+) -> tuple[np.ndarray, dict[str, np.ndarray]]:
     """Insert NaN rows between data segments.
 
     Segments come from ``segment`` (per-row labels, as returned by
@@ -292,7 +292,7 @@ def insert_gaps(
     return t_new, out
 
 
-def _night_bounds(day: date) -> Tuple[float, float]:
+def _night_bounds(day: date) -> tuple[float, float]:
     return Products.night(day, deployment=DEPLOYMENT)
 
 
@@ -300,7 +300,7 @@ def _night_date(start_unix: float) -> str:
     return datetime.fromtimestamp(start_unix, _site_tz()).date().isoformat()
 
 
-def _night_info(start: float, end: float, latest: Optional[Tuple[float, float]]) -> Dict[str, Any]:
+def _night_info(start: float, end: float, latest: tuple[float, float] | None) -> dict[str, Any]:
     return {
         "date": _night_date(start),
         "start_unix": start,
@@ -313,7 +313,7 @@ def _night_info(start: float, end: float, latest: Optional[Tuple[float, float]])
     }
 
 
-def _latest_night(prod: Any) -> Optional[Tuple[float, float]]:
+def _latest_night(prod: Any) -> tuple[float, float] | None:
     """The most recent night that has QL data (``Products.latest_night``)."""
     try:
         return prod.latest_night(deployment=DEPLOYMENT)
@@ -326,7 +326,7 @@ def _latest_night(prod: Any) -> Optional[Tuple[float, float]]:
 # ---------------------------------------------------------------------------
 class _Cache:
     def __init__(self) -> None:
-        self._d: Dict[Any, Tuple[float, Any]] = {}
+        self._d: dict[Any, tuple[float, Any]] = {}
         self._lock = threading.Lock()
 
     def get(self, key: Any) -> Any:
@@ -351,7 +351,7 @@ class _Cache:
 _cache = _Cache()
 
 
-def _data_version(prod: Any) -> Tuple:
+def _data_version(prod: Any) -> tuple:
     """Cheap fingerprint of the databases (changes whenever they are written)."""
     out = []
     for db in (prod.settings.products_db, prod.settings.catalog_db):
@@ -370,7 +370,7 @@ def _data_version(prod: Any) -> Tuple:
 def _quicklook(
     prod: Any, t0: float, t1: float, load: str, p0: bool, max_rows: int,
     waterfall: str = "median", probe_rfi: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """The QL waterfalls of a range. ``waterfall_q`` is the Q waterfall binned
     by ``waterfall`` (:data:`Q_WATERFALLS`); products without that one (QL
     before version 3) fall back to the median, with ``waterfall_note``.
@@ -438,7 +438,7 @@ def _quicklook(
     }
 
 
-def _band_series(l1: Any, t0: float, t1: float) -> Tuple[Dict[str, Any], List[str]]:
+def _band_series(l1: Any, t0: float, t1: float) -> tuple[dict[str, Any], list[str]]:
     """Per-cycle band power and band-median Q from the night's L1 products.
 
     Returns the series and the unreadable products. (The per-cycle flags come
@@ -482,7 +482,7 @@ def _band_series(l1: Any, t0: float, t1: float) -> Tuple[Dict[str, Any], List[st
     }, missing
 
 
-def _housekeeping(cat: Any, t0: float, t1: float, names: List[str]) -> Dict[str, Any]:
+def _housekeeping(cat: Any, t0: float, t1: float, names: list[str]) -> dict[str, Any]:
     hk = cat.housekeeping(start=t0, end=t1, names=names, deployment=DEPLOYMENT)
     series = []
     for name in names:
@@ -505,7 +505,7 @@ def _housekeeping(cat: Any, t0: float, t1: float, names: List[str]) -> Dict[str,
     return {"series": series, "n_readings": int(len(hk)), "gap_s": HOUSEKEEPING_GAP_S}
 
 
-def _files_qa(prod: Any, cat: Any, l1: Any, t0: float, t1: float) -> Tuple[List[Dict[str, Any]], Dict[str, List[float]]]:
+def _files_qa(prod: Any, cat: Any, l1: Any, t0: float, t1: float) -> tuple[list[dict[str, Any]], dict[str, list[float]]]:
     """Per-file QA rows (catalog spectra + L1 metrics) and ADC/drop event times."""
     spectra = cat.spectra(load="ant", start=t0, end=t1, deployment=DEPLOYMENT)
     ids = [int(i) for i in spectra.file_id]
@@ -526,8 +526,8 @@ def _files_qa(prod: Any, cat: Any, l1: Any, t0: float, t1: float) -> Tuple[List[
     except LookupError:
         ql_ids = set()
     fs = QA_THRESHOLDS["adc_full_scale"]
-    events: Dict[str, List[float]] = {"dropout_unix": [], "adc_clip_unix": [], "data_drop_unix": []}
-    clip_counts: Dict[int, int] = {}
+    events: dict[str, list[float]] = {"dropout_unix": [], "adc_clip_unix": [], "data_drop_unix": []}
+    clip_counts: dict[int, int] = {}
     if cycles is not None and len(cycles):
         adcmax = cycles[["adcmax0", "adcmax1", "adcmax2"]].to_numpy(dtype=float)
         adcmin = cycles[["adcmin0", "adcmin1", "adcmin2"]].to_numpy(dtype=float)
@@ -548,7 +548,7 @@ def _files_qa(prod: Any, cat: Any, l1: Any, t0: float, t1: float) -> Tuple[List[
         q = l1_by_id.get(fid)
         n_cycles = _scalar(r.n_cycles)
 
-        def win(col: str) -> Any:  # within-night value (Products.l1(clip=True))
+        def win(col: str, q: Any = q) -> Any:  # within-night value (Products.l1(clip=True))
             return _scalar(getattr(q, col, None)) if q is not None else None
 
         rfi_w = win("rfi_occupancy_window")
@@ -582,9 +582,9 @@ def _cycles(n: int) -> str:
     return f"{n} cycle{'' if n == 1 else 's'}"
 
 
-def _badges(row: Dict[str, Any], longest: int, failed: bool) -> List[Dict[str, str]]:
+def _badges(row: dict[str, Any], longest: int, failed: bool) -> list[dict[str, str]]:
     """QA badges for one file: level is ``critical``, ``warn``, ``info`` or ``ok``."""
-    b: List[Dict[str, str]] = []
+    b: list[dict[str, str]] = []
     if not row["has_l1"] and not row["has_ql"]:
         b.append({
             "level": "info",
@@ -623,11 +623,11 @@ def _badges(row: Dict[str, Any], longest: int, failed: bool) -> List[Dict[str, s
 def build_night(
     prod: Any, start: float, end: float, p0: bool = False, max_rows: int = DEFAULT_MAX_ROWS,
     waterfall: str = "median",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Everything the night page shows, from precomputed products only."""
     tic = time.perf_counter()
-    notes: List[str] = []
-    out: Dict[str, Any] = {"night": _night_info(start, end, _latest_night(prod))}
+    notes: list[str] = []
+    out: dict[str, Any] = {"night": _night_info(start, end, _latest_night(prod))}
     # probe_rfi: the page offers the RFI-keeping waterfalls only if they exist
     out["quicklook"] = _quicklook(prod, start, end, "ant", p0, max_rows, waterfall, probe_rfi=True)
     try:
@@ -636,7 +636,7 @@ def build_night(
     except LookupError:
         l1 = None
         notes.append("no L1 products yet")
-    dropout_times: List[float] = []
+    dropout_times: list[float] = []
     if l1 is not None:
         out["band"], missing = _band_series(l1, start, end)
         # per-cycle flags (stored, or recomputed for older products)
@@ -668,7 +668,7 @@ def build_night(
     }
     out["thresholds"] = QA_THRESHOLDS
     out["warnings"] = notes
-    out["generated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    out["generated_at"] = datetime.now(UTC).isoformat(timespec="seconds")
     out["elapsed_s"] = round(time.perf_counter() - tic, 3)
     return out
 
@@ -683,11 +683,11 @@ def _empty_l1() -> Any:
 # Endpoints
 # ---------------------------------------------------------------------------
 @router.get("/status")
-def status() -> Dict[str, Any]:
+def status() -> dict[str, Any]:
     if IMPORT_ERROR is not None:
         return {"available": False, "error": IMPORT_ERROR}
     prod = get_products()
-    out: Dict[str, Any] = {"available": True, "error": None,
+    out: dict[str, Any] = {"available": True, "error": None,
                            "products_db": str(prod.settings.products_db)}
     for stage in ("ql", "l1"):
         try:
@@ -700,7 +700,7 @@ def status() -> Dict[str, Any]:
 
 
 @router.get("/nights/latest")
-def nights_latest() -> Dict[str, Any]:
+def nights_latest() -> dict[str, Any]:
     prod = get_products()
     with _db_errors():
         latest = _latest_night(prod)
@@ -711,12 +711,12 @@ def nights_latest() -> Dict[str, Any]:
 
 @router.get("/night")
 def night(
-    date: Optional[str] = Query(None, description="Local date of the night's evening (YYYY-MM-DD); default: latest"),
+    date: str | None = Query(None, description="Local date of the night's evening (YYYY-MM-DD); default: latest"),
     p0: bool = Query(False, description="Also return the p0 waterfall"),
     max_rows: int = Query(DEFAULT_MAX_ROWS, ge=10, le=MAX_ROWS_LIMIT),
     waterfall: str = Query("median", pattern=WATERFALL_PATTERN,
                            description="How Q is binned: median (hides RFI), mean or max (keep it)"),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     prod = get_products()
     if date:
         try:
@@ -751,7 +751,7 @@ def quicklook(
     p0: bool = False,
     max_rows: int = Query(DEFAULT_MAX_ROWS, ge=10, le=MAX_ROWS_LIMIT),
     waterfall: str = Query("median", pattern=WATERFALL_PATTERN),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     prod = get_products()
     t0, t1 = _require_range(start, end)
     if p0 and t1 - t0 > MAX_SPAN_DAYS_P0 * 86400:
@@ -763,7 +763,7 @@ def quicklook(
 
 
 @router.get("/l1")
-def l1(start: str, end: str, load: Optional[str] = "ant") -> Dict[str, Any]:
+def l1(start: str, end: str, load: str | None = "ant") -> dict[str, Any]:
     prod = get_products()
     t0, t1 = _require_range(start, end)
     try:
@@ -781,7 +781,7 @@ def l1(start: str, end: str, load: Optional[str] = "ant") -> Dict[str, Any]:
 
 
 @router.get("/housekeeping")
-def housekeeping(start: str, end: str, names: Optional[str] = None) -> Dict[str, Any]:
+def housekeeping(start: str, end: str, names: str | None = None) -> dict[str, Any]:
     prod = get_products()
     t0, t1 = _require_range(start, end)
     wanted = [n for n in (names or "").split(",") if n] or list(HOUSEKEEPING_NAMES)

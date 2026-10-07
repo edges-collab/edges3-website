@@ -18,12 +18,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-from conftest import ALT_PARAMS, CAL_DAY, CAL_DATE, S11_GOOD, S11_OLD
 
 import calibrations
 import config
 import products_api
 import runs_api
+from conftest import ALT_PARAMS, CAL_DATE, CAL_DAY, S11_GOOD, S11_OLD
 
 TESTS = Path(__file__).resolve().parent
 

@@ -33,7 +33,7 @@ import math
 import threading
 import time
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -71,7 +71,7 @@ STATUS_TTL_S = 10 * 60
 #: The settings the page offers, by section: (key, label, min, max, integer).
 #: The others (``fit.Lh`` -1 only, ``fit.delay_sweep_ns``, ``dicke``: a
 #: convention the solution does not depend on) keep their defaults.
-FIELDS: Dict[str, List[Tuple[str, str, float, float, bool]]] = {
+FIELDS: dict[str, list[tuple[str, str, float, float, bool]]] = {
     "fit": [
         ("cterms", "Scale/offset terms (cterms)", 1, 20, True),
         ("wterms", "Noise-wave terms (wterms)", 1, 20, True),
@@ -108,7 +108,7 @@ def available() -> bool:
     return rcal is not None
 
 
-def default_config(prod: Any) -> Dict[str, Any]:
+def default_config(prod: Any) -> dict[str, Any]:
     """The readers' default rcal configuration.
 
     ``hash``: the promoted configuration (else the newest with products; None
@@ -129,7 +129,7 @@ def default_config(prod: Any) -> Dict[str, Any]:
     return {"hash": h, "config": config, "skew": bool(h) and rcal.config_hash(config) != h}
 
 
-def effective(defaults: Dict[str, Any], params: Dict[str, Any]) -> Dict[str, Any]:
+def effective(defaults: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
     """The full settings: ``params`` (overrides) applied to ``defaults``."""
     out = copy.deepcopy(defaults)
     for section, values in params.items():
@@ -137,13 +137,13 @@ def effective(defaults: Dict[str, Any], params: Dict[str, Any]) -> Dict[str, Any
     return out
 
 
-def clean_params(params: Optional[Dict[str, Any]], defaults: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+def clean_params(params: dict[str, Any] | None, defaults: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Check the page's settings; return only those that differ from ``defaults``.
 
     Raises ``ValueError`` (a 400) for unknown keys, non-numbers, values out of
     range or a fit band narrower than :data:`MIN_BAND_MHZ`.
     """
-    out: Dict[str, Dict[str, Any]] = {}
+    out: dict[str, dict[str, Any]] = {}
     known = {s: {f[0]: f for f in fs} for s, fs in FIELDS.items()}
     for section, values in (params or {}).items():
         if section not in known or not isinstance(values, dict):
@@ -172,12 +172,12 @@ def clean_params(params: Optional[Dict[str, Any]], defaults: Dict[str, Any]) -> 
     return out
 
 
-def config_hash(settings: Dict[str, Any]) -> str:
+def config_hash(settings: dict[str, Any]) -> str:
     """The configuration hash of full settings (:func:`effective`)."""
     return rcal.config_hash(settings)
 
 
-def form(defaults: Dict[str, Any]) -> Dict[str, Any]:
+def form(defaults: dict[str, Any]) -> dict[str, Any]:
     """The settings form: fields by section, with the default settings."""
     return {
         "defaults": defaults,
@@ -194,18 +194,18 @@ def day_key(day: str) -> str:
     return _cal_day_key(day)
 
 
-def status_text(status: str, error: Optional[str] = None) -> str:
+def status_text(status: str, error: str | None = None) -> str:
     """A day status (``Products.calibration_days``) in words."""
     if status == "failed":
         return f"the pipeline failed on it: {error or 'no error recorded'}"
     return STATUS_TEXT.get(status, status)
 
 
-_status_cache: Dict[str, Any] = {"key": None, "t": 0.0, "rows": None}
+_status_cache: dict[str, Any] = {"key": None, "t": 0.0, "rows": None}
 _status_lock = threading.Lock()
 
 
-def day_statuses(prod: Any) -> Dict[str, Dict[str, Any]]:
+def day_statuses(prod: Any) -> dict[str, dict[str, Any]]:
     """Every calibration day (all four loads) and what the pipeline made of it
     in the default configuration: ``status``, ``reason`` (None when done),
     ``s11_session``, ``issues``. Cached for :data:`STATUS_TTL_S` (per default
@@ -219,7 +219,7 @@ def day_statuses(prod: Any) -> Dict[str, Dict[str, Any]]:
         if c["rows"] is not None and c["key"] == h and time.time() - c["t"] < STATUS_TTL_S:
             return c["rows"]
         if h is None:
-            rows: Dict[str, Dict[str, Any]] = {}
+            rows: dict[str, dict[str, Any]] = {}
         else:
             df = prod.calibration_days()
             rows = {}
@@ -235,7 +235,7 @@ def day_statuses(prod: Any) -> Dict[str, Dict[str, Any]]:
         return rows
 
 
-def unavailable_reason(statuses: Dict[str, Dict[str, Any]], key: str) -> str:
+def unavailable_reason(statuses: dict[str, dict[str, Any]], key: str) -> str:
     """Why a day has no stored calibration."""
     st = statuses.get(key)
     if st is None:
@@ -243,7 +243,7 @@ def unavailable_reason(statuses: Dict[str, Dict[str, Any]], key: str) -> str:
     return st["reason"] or "not stored yet"
 
 
-def stored_rows(prod: Any) -> List[Dict[str, Any]]:
+def stored_rows(prod: Any) -> list[dict[str, Any]]:
     """The stored default calibrations, oldest first (summary columns only)."""
     try:
         df = prod.calibrations()
@@ -256,7 +256,7 @@ def stored_rows(prod: Any) -> List[Dict[str, Any]]:
     return [{k: _scalar(v) for k, v in r.items()} for r in df.to_dict("records")]
 
 
-def day_list(prod: Any) -> Dict[str, Any]:
+def day_list(prod: Any) -> dict[str, Any]:
     """Stored days, plus the calibration days without one (and why)."""
     rows = stored_rows(prod)
     have = {r["cal_day"] for r in rows}
@@ -273,12 +273,12 @@ def latest_day(prod: Any) -> str:
     return rows[-1]["cal_day"]
 
 
-def stored_row(prod: Any, key: str) -> Optional[Dict[str, Any]]:
+def stored_row(prod: Any, key: str) -> dict[str, Any] | None:
     return next((r for r in stored_rows(prod) if r["cal_day"] == key), None)
 
 
 def product(prod: Any, key: str, config_hash: str,
-            deployment: str = "edges3-mro") -> Optional[Dict[str, Any]]:
+            deployment: str = "edges3-mro") -> dict[str, Any] | None:
     """The stored product of a day: ``path``, ``sha256`` (of the file) and
     ``input_key`` (of its inputs: it changes when the pipeline reprocesses
     the day because an input changed). None if there is none."""
@@ -291,7 +291,7 @@ def product(prod: Any, key: str, config_hash: str,
     return None if df.empty else {k: str(v) for k, v in df.iloc[0].items()}
 
 
-def other_configs(prod: Any, default: Optional[str]) -> List[Dict[str, Any]]:
+def other_configs(prod: Any, default: str | None) -> list[dict[str, Any]]:
     """Stored rcal configurations other than the default (e.g. Alan mode, v1)."""
     df = prod.configs("rcal")
     return [{k: _scalar(v) for k, v in r.items()} for r in df.to_dict("records")
@@ -311,7 +311,7 @@ def _scalar(v: Any) -> Any:
     return v
 
 
-def _arr(x: Any, decimals: int) -> Optional[List[Optional[float]]]:
+def _arr(x: Any, decimals: int) -> list[float | None] | None:
     """A float array as a JSON list (NaN as null), rounded to keep it small."""
     if x is None:
         return None
@@ -330,7 +330,7 @@ def _plain(x: Any) -> Any:
     return _scalar(x)
 
 
-def _sig(x: Any, digits: int = 7) -> Optional[List[Optional[float]]]:
+def _sig(x: Any, digits: int = 7) -> list[float | None] | None:
     """A float array as a JSON list to ``digits`` significant digits (for
     values far from 1, such as Q of the ambient load, ~5e-4)."""
     if x is None:
@@ -339,7 +339,7 @@ def _sig(x: Any, digits: int = 7) -> Optional[List[Optional[float]]]:
             for v in np.asarray(x, dtype=np.float64).ravel().tolist()]
 
 
-def calibration_json(cal: Any, info: Dict[str, Any], source: str) -> Dict[str, Any]:
+def calibration_json(cal: Any, info: dict[str, Any], source: str) -> dict[str, Any]:
     """Everything the page plots, at the product's resolution (3072 channels).
 
     Temperatures are rounded to 0.1 mK, S11s and the loss to 1e-7, Q to 7
@@ -353,7 +353,7 @@ def calibration_json(cal: Any, info: Dict[str, Any], source: str) -> Dict[str, A
     t_load, t_load_ns = float(info["t_load"]), float(info["t_load_ns"])
     metrics = info.get("metrics") or {}
 
-    def load(name: str) -> Dict[str, Any]:
+    def load(name: str) -> dict[str, Any]:
         d = (info.get("loads") or {}).get(name) or {}
         s11 = d.get("s11")
         return {
@@ -402,13 +402,13 @@ def calibration_json(cal: Any, info: Dict[str, Any], source: str) -> Dict[str, A
 # Stored calibrations, cached
 # ---------------------------------------------------------------------------
 _CACHE_MAX = 16
-_cache: "OrderedDict[Tuple[str, str, str], Dict[str, Any]]" = OrderedDict()
+_cache: OrderedDict[tuple[str, str, str], dict[str, Any]] = OrderedDict()
 _cache_lock = threading.Lock()
 
 
 def stored_json(
-    prod: Any, key: str, config_hash: Optional[str] = None, deployment: str = "edges3-mro"
-) -> Dict[str, Any]:
+    prod: Any, key: str, config_hash: str | None = None, deployment: str = "edges3-mro"
+) -> dict[str, Any]:
     """The stored calibration of a day as JSON; ``LookupError`` if there is none.
 
     Cached by (day, config hash, product file and its checksum): a
@@ -441,10 +441,10 @@ def clear_cache() -> None:
         _status_cache.update(key=None, t=0.0, rows=None)
 
 
-def load_cycles(prod: Any, t0: float, t1: float) -> Dict[str, Any]:
+def load_cycles(prod: Any, t0: float, t1: float) -> dict[str, Any]:
     """Per cycle of each calibration load in ``[t0, t1]`` (L1): the time, the
     band-median Q (60-90 MHz) and the dropout/outlier flags."""
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     for load in ("amb", "hot", "open", "short"):
         try:
             df = prod.l1_cycles(t0, t1, load=load)
@@ -457,6 +457,6 @@ def load_cycles(prod: Any, t0: float, t1: float) -> Dict[str, Any]:
         out[load] = {
             "time_unix": _arr(df.time_unix, 1),
             "band_median_q": _sig(df.band_median_q),
-            "flagged": [bool(a or b) for a, b in zip(df.dropout, df.outlier)],
+            "flagged": [bool(a or b) for a, b in zip(df.dropout, df.outlier, strict=True)],
         }
     return out

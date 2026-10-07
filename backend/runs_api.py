@@ -65,9 +65,9 @@ import subprocess
 import threading
 import zipfile
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -125,7 +125,7 @@ def code_version() -> str:
 #: Parameters of a night: default and allowed range (must match
 #: run_single_day.DEFAULT_PARAMS, which is not imported to keep this light).
 #: A calibration's settings are the pipeline's (``calibrations.clean_params``).
-PARAMS: Dict[str, Dict[str, Tuple[float, float, float, bool]]] = {
+PARAMS: dict[str, dict[str, tuple[float, float, float, bool]]] = {
     #                name: (default, min, max, integer)
     "observation": {
         "ant_s11_fstart": (58.0, 40.0, 200.0, False),
@@ -139,7 +139,7 @@ CALIBRATION_MEM_LIMIT_GB = 6.0
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _root(kind: str) -> Path:
@@ -166,9 +166,9 @@ def _write(path: Path, payload: Any) -> None:
     tmp.replace(path)
 
 
-def clean_params(kind: str, params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def clean_params(kind: str, params: dict[str, Any] | None) -> dict[str, Any]:
     """Defaults merged in, types and ranges checked (400 on bad input)."""
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     params = params or {}
     unknown = set(params) - set(PARAMS[kind])
     if unknown:
@@ -199,7 +199,7 @@ def _digest(obj: Any) -> str:
     return hashlib.sha256(blob).hexdigest()[:16]
 
 
-def run_id(inputs: Dict[str, Any], params: Dict[str, Any], calibration: Dict[str, Any]) -> str:
+def run_id(inputs: dict[str, Any], params: dict[str, Any], calibration: dict[str, Any]) -> str:
     """A night's key: what it computes from, including the input files' versions
     and the calibration (stored: its product; computed: its job)."""
     return _digest({
@@ -214,7 +214,7 @@ def run_id(inputs: Dict[str, Any], params: Dict[str, Any], calibration: Dict[str
 
 
 def calibration_id(
-    day: str, config_hash: str, inputs_key: Optional[str], s11_session: Optional[str] = None,
+    day: str, config_hash: str, inputs_key: str | None, s11_session: str | None = None,
 ) -> str:
     """A computed calibration's key. The pipeline takes the inputs from the
     catalog itself, so the day, the settings (their configuration hash), the
@@ -241,9 +241,9 @@ class _Queue:
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self.cond = threading.Condition(self.lock)
-        self.pending: Deque[Tuple[str, str]] = collections.deque()
-        self.active: Dict[Tuple[str, str], str] = {}  # (kind, id) -> queued|running
-        self.worker: Optional[threading.Thread] = None
+        self.pending: collections.deque[tuple[str, str]] = collections.deque()
+        self.active: dict[tuple[str, str], str] = {}  # (kind, id) -> queued|running
+        self.worker: threading.Thread | None = None
 
     def submit(self, kind: str, rid: str) -> None:
         with self.cond:
@@ -277,7 +277,7 @@ class _Queue:
                 except Exception:  # never kill the worker
                     log.exception("eviction failed")
 
-    def snapshot(self) -> Dict[str, Any]:
+    def snapshot(self) -> dict[str, Any]:
         with self.lock:
             return {
                 "running": [f"{k}/{i}" for (k, i), s in self.active.items() if s == "running"],
@@ -312,7 +312,7 @@ def _alive(pid: Any) -> bool:
         return False
 
 
-def _orphaned(status: Dict[str, Any], kind: str, rid: str) -> bool:
+def _orphaned(status: dict[str, Any], kind: str, rid: str) -> bool:
     """A queued/running run that no live server process owns."""
     if status.get("state") not in ("queued", "running"):
         return False
@@ -322,7 +322,7 @@ def _orphaned(status: Dict[str, Any], kind: str, rid: str) -> bool:
     return pid == os.getpid() or not _alive(pid)
 
 
-def status_of(kind: str, rid: str) -> Optional[Dict[str, Any]]:
+def status_of(kind: str, rid: str) -> dict[str, Any] | None:
     """The run's status, or None if there is no such run. A run left queued or
     running by a server process that has gone reads as ``failed`` (interrupted);
     one owned by another live server process keeps its state."""
@@ -335,7 +335,7 @@ def status_of(kind: str, rid: str) -> Optional[Dict[str, Any]]:
     return status
 
 
-def _limit_memory(gb: float) -> List[str]:
+def _limit_memory(gb: float) -> list[str]:
     """A command prefix capping the child's address space (``ulimit -v``)."""
     sh = shutil.which("sh")
     if not sh:
@@ -348,7 +348,7 @@ def _execute(kind: str, rid: str) -> None:
     request = _read(d / "request.json", {})
     cmd = [config.PYTHON, str(config.RUN_SCRIPT), "--stage", kind, "--run_dir", str(d),
            "--params", str(d / "params.json")]
-    limit: List[str] = []
+    limit: list[str] = []
     if kind == "calibration":
         cmd += ["--day", request["day"]]
         if request.get("catalog_db"):
@@ -442,19 +442,19 @@ def _evict(kind: str) -> None:
 class CalibrationRequest(BaseModel):
     day: str = "Latest"
     #: the pipeline's settings, by section: {"fit": {"cterms": 7}}
-    params: Dict[str, Any] = Field(default_factory=dict)
+    params: dict[str, Any] = Field(default_factory=dict)
     #: a full S11 session instead of the recommended one (always computed)
-    s11_session: Optional[str] = None
+    s11_session: str | None = None
 
 
 class ObservationRequest(BaseModel):
     night: str = "Latest"
     ant_s11: str = "Latest"
-    params: Dict[str, Any] = Field(default_factory=dict)
+    params: dict[str, Any] = Field(default_factory=dict)
     calibration: CalibrationRequest = Field(default_factory=CalibrationRequest)
 
 
-def _prepare(kind: str, rid: str, files: Dict[str, Any]) -> None:
+def _prepare(kind: str, rid: str, files: dict[str, Any]) -> None:
     """Create the run directory with its JSON files (``name -> content``)."""
     d = _run_dir(kind, rid)
     if (d / "status.json").exists():
@@ -474,7 +474,7 @@ def _pipeline():
         raise HTTPException(status_code=400, detail=str(e)) from None
 
 
-def resolve_calibration(req: CalibrationRequest) -> Dict[str, Any]:
+def resolve_calibration(req: CalibrationRequest) -> dict[str, Any]:
     """Which calibration a request means: the stored default of the day, or a
     computation with these settings or S11 session (with its job id and
     status).
@@ -508,7 +508,7 @@ def resolve_calibration(req: CalibrationRequest) -> Dict[str, Any]:
             st = calibrations.day_statuses(prod).get(day)
             status = {"status": st["status"] if st else "no_spectra",
                       "reason": calibrations.unavailable_reason(calibrations.day_statuses(prod), day)}
-        out: Dict[str, Any] = {
+        out: dict[str, Any] = {
             "day": day, "params": params, "s11_session": s11, "config_hash": h,
             "default_hash": dflt["hash"], "is_default": h == dflt["hash"] and s11 is None,
             "version_skew": dflt["skew"], "pipeline": _dist_version("edges-pipeline"),
@@ -527,13 +527,13 @@ def resolve_calibration(req: CalibrationRequest) -> Dict[str, Any]:
             "unavailable": None}
 
 
-def _public(d: Dict[str, Any]) -> Dict[str, Any]:
+def _public(d: dict[str, Any]) -> dict[str, Any]:
     """A response without the server-only (``_``) keys, recursively."""
     return {k: _public(v) if isinstance(v, dict) else v for k, v in d.items()
             if not k.startswith("_")}
 
 
-def _start_calibration(cal: Dict[str, Any]) -> None:
+def _start_calibration(cal: dict[str, Any]) -> None:
     _start("calibration", cal["id"], {
         "request.json": {"day": cal["day"], "config_hash": cal["config_hash"],
                          "overrides": cal["params"], "s11_session": cal["s11_session"],
@@ -542,7 +542,7 @@ def _start_calibration(cal: Dict[str, Any]) -> None:
     })
 
 
-def _calibration_spec(cal: Dict[str, Any]) -> Dict[str, Any]:
+def _calibration_spec(cal: dict[str, Any]) -> dict[str, Any]:
     """What an observation needs to load its calibration (``calibration.json``)."""
     spec = {"cal_day": cal["day"], **{k: cal[k] for k in ("config_hash", "source", "id", "params")}}
     if cal["source"] == "stored":
@@ -554,7 +554,7 @@ def _calibration_spec(cal: Dict[str, Any]) -> Dict[str, Any]:
     return spec
 
 
-def resolve_observation(req: ObservationRequest) -> Dict[str, Any]:
+def resolve_observation(req: ObservationRequest) -> dict[str, Any]:
     """A night's inputs and run id. If its calibration is unavailable, ``id``
     is None (nothing to run) and ``calibration.unavailable`` says why."""
     cal = resolve_calibration(req.calibration)
@@ -571,7 +571,7 @@ def resolve_observation(req: ObservationRequest) -> Dict[str, Any]:
             "status": status_of("observation", rid), "calibration": cal, "_spec": spec}
 
 
-def _start(kind: str, rid: str, files: Dict[str, Any]) -> None:
+def _start(kind: str, rid: str, files: dict[str, Any]) -> None:
     with _start_lock:  # check, clean, prepare and submit as one step
         st = status_of(kind, rid)
         if st and st["state"] in ("done", "queued", "running"):
@@ -585,7 +585,7 @@ def _start(kind: str, rid: str, files: Dict[str, Any]) -> None:
         queue.submit(kind, rid)
 
 
-def _describe(kind: str, rid: str) -> Dict[str, Any]:
+def _describe(kind: str, rid: str) -> dict[str, Any]:
     d = _run_dir(kind, rid)
     status = status_of(kind, rid)
     if status is None:
@@ -604,12 +604,12 @@ def _describe(kind: str, rid: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
-def _defaults(kind: str) -> Dict[str, Any]:
+def _defaults(kind: str) -> dict[str, Any]:
     return {k: v[0] for k, v in PARAMS[kind].items()}
 
 
 @router.get("/calibrations")
-def calibration_list() -> Dict[str, Any]:
+def calibration_list() -> dict[str, Any]:
     """Days with a stored calibration, catalog days without one (and why), the
     settings form, and the other stored configurations (for comparison)."""
     with _pipeline() as prod, _catalog() as cat:
@@ -626,7 +626,7 @@ def calibration_list() -> Dict[str, Any]:
 
 
 @router.get("/calibrations/stored/{day}")
-def calibration_stored(day: str, config_hash: Optional[str] = None) -> Dict[str, Any]:
+def calibration_stored(day: str, config_hash: str | None = None) -> dict[str, Any]:
     """A day's stored calibration (default settings unless ``config_hash``)."""
     if config_hash is not None and not re.fullmatch(r"[0-9a-f]{64}", config_hash):
         raise HTTPException(status_code=400, detail="config_hash must be 64 hex digits")
@@ -645,7 +645,7 @@ def calibration_stored(day: str, config_hash: Optional[str] = None) -> Dict[str,
 
 
 @router.get("/calibrations/cycles")
-def calibration_cycles(start: float, end: float) -> Dict[str, Any]:
+def calibration_cycles(start: float, end: float) -> dict[str, Any]:
     """Each calibration load's cycles in ``[start, end]`` (POSIX s, at most 2
     days): band-median Q and dropout/outlier flags, from L1."""
     if not 0 < end - start <= 2 * 86400:
@@ -655,12 +655,12 @@ def calibration_cycles(start: float, end: float) -> Dict[str, Any]:
 
 
 @router.post("/calibrations/resolve")
-def calibration_resolve(req: CalibrationRequest) -> Dict[str, Any]:
+def calibration_resolve(req: CalibrationRequest) -> dict[str, Any]:
     return _public(resolve_calibration(req))
 
 
 @router.post("/calibrations")
-def calibration_start(req: CalibrationRequest) -> Dict[str, Any]:
+def calibration_start(req: CalibrationRequest) -> dict[str, Any]:
     """Compute a calibration with non-default settings (the default is stored)."""
     cal = resolve_calibration(req)
     if cal["source"] == "stored":
@@ -673,23 +673,23 @@ def calibration_start(req: CalibrationRequest) -> Dict[str, Any]:
 
 
 @router.get("/calibrations/{rid}")
-def calibration_get(rid: str) -> Dict[str, Any]:
+def calibration_get(rid: str) -> dict[str, Any]:
     return _describe("calibration", rid)
 
 
 @router.get("/observations/options")
-def observation_options() -> Dict[str, Any]:
+def observation_options() -> dict[str, Any]:
     with _catalog() as cat:
         return {**catalog_inputs.observation_options(cat), "defaults": _defaults("observation")}
 
 
 @router.post("/observations/resolve")
-def observation_resolve(req: ObservationRequest) -> Dict[str, Any]:
+def observation_resolve(req: ObservationRequest) -> dict[str, Any]:
     return _public(resolve_observation(req))
 
 
 @router.post("/observations")
-def observation_start(req: ObservationRequest) -> Dict[str, Any]:
+def observation_start(req: ObservationRequest) -> dict[str, Any]:
     r = resolve_observation(req)
     cal = r["calibration"]
     if cal["unavailable"]:
@@ -709,12 +709,12 @@ def observation_start(req: ObservationRequest) -> Dict[str, Any]:
 
 
 @router.get("/observations/{rid}")
-def observation_get(rid: str) -> Dict[str, Any]:
+def observation_get(rid: str) -> dict[str, Any]:
     return _describe("observation", rid)
 
 
 @router.get("/runs/queue")
-def run_queue() -> Dict[str, Any]:
+def run_queue() -> dict[str, Any]:
     return queue.snapshot()
 
 
@@ -734,6 +734,6 @@ def run_download(kind: str, rid: str) -> StreamingResponse:
                              headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
-def summary() -> List[str]:
+def summary() -> list[str]:
     """For the status page."""
     return [f"{k}: {len(list(_root(k).glob('*/status.json')))} runs" for k in KINDS]

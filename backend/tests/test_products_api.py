@@ -9,9 +9,9 @@ import sys
 
 import numpy as np
 import pytest
-from conftest import CYCLE_S, NFREQ, NIGHT, RFI_CHANNEL, T_A, T_B, T_BAD, T_C, T_DAY
 
 import products_api
+from conftest import CYCLE_S, NFREQ, NIGHT, RFI_CHANNEL, T_A, T_B, T_BAD, T_C, T_DAY
 
 
 def _decode(w):

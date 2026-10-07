@@ -6,10 +6,10 @@ import json
 import os
 
 import pytest
-from conftest import CAL_DAY, S11_GOOD, S11_OLD, T_A, T_B, T_C, UTC
 
 import catalog_inputs
 import products_api
+from conftest import CAL_DAY, S11_GOOD, S11_OLD, T_A, T_B, T_C, UTC
 
 NIGHT = "2025-04-10"
 

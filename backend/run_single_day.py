@@ -33,7 +33,7 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 from astropy import units as un
@@ -41,13 +41,14 @@ from astropy import units as un
 # Allow ``python run_single_day.py`` to import the site's modules.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from pygsdata import GSData  # noqa: E402
-from read_acq.gsdata import fast_lst_setter, read_acq_to_gsdata  # noqa: E402
-from edges.const import KNOWN_TELESCOPES  # noqa: E402
-from edges.cal import ReflectionCoefficient, S11ModelParams, sparams as sp  # noqa: E402
-from edges.frequencies import get_mask  # noqa: E402
 import edges.io as io  # noqa: E402
 import edges.modeling as mdl  # noqa: E402
+from edges.cal import ReflectionCoefficient, S11ModelParams  # noqa: E402
+from edges.cal import sparams as sp
+from edges.const import KNOWN_TELESCOPES  # noqa: E402
+from edges.frequencies import get_mask  # noqa: E402
+from pygsdata import GSData  # noqa: E402
+from read_acq.gsdata import fast_lst_setter, read_acq_to_gsdata  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -93,7 +94,7 @@ def compute_antenna_s11(
     f_low: float = DEFAULT_ANT_S11_FSTART,
     f_high: float = DEFAULT_ANT_S11_FSTOP,
     n_terms: int = DEFAULT_ANT_S11_NTERMS,
-) -> Tuple[ReflectionCoefficient, ReflectionCoefficient]:
+) -> tuple[ReflectionCoefficient, ReflectionCoefficient]:
     """The antenna S11 model at ``target_freqs`` and the calibrated measurement.
 
     The model is fitted in ``[f_low, f_high]`` MHz and set to NaN outside it:
@@ -160,7 +161,7 @@ def _q(p0: np.ndarray, p1: np.ndarray, p2: np.ndarray) -> np.ndarray:
         return (p0 - p1) / (p2 - p1)
 
 
-def _bin_index(freqs_mhz: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _bin_index(freqs_mhz: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(channel selection, bin index per selected channel, bin centres) for waterfalls."""
     lo, hi = WF_BAND_MHZ
     edges = np.arange(lo, hi + 1e-9, WF_BIN_MHZ)
@@ -189,8 +190,8 @@ class _Mean:
     """Running NaN-aware mean over time of per-channel spectra."""
 
     def __init__(self) -> None:
-        self.sum: Optional[np.ndarray] = None
-        self.n: Optional[np.ndarray] = None
+        self.sum: np.ndarray | None = None
+        self.n: np.ndarray | None = None
 
     def add(self, x: np.ndarray) -> None:
         ok = np.isfinite(x)
@@ -203,7 +204,7 @@ class _Mean:
             return self.sum / self.n
 
 
-def _save(run_dir: Path, name: str, arrays: Dict[str, Any]) -> str:
+def _save(run_dir: Path, name: str, arrays: dict[str, Any]) -> str:
     np.savez(run_dir / name, **arrays)
     return name
 
@@ -218,9 +219,9 @@ def _write_json(path: Path, payload: Any) -> None:
 # Stage 1: calibration (non-default settings)
 # ---------------------------------------------------------------------------
 def run_calibration(
-    day: str, params: Dict[str, Any], run_dir: Path, catalog_db: Optional[str] = None,
-    s11_session: Optional[str] = None,
-) -> Dict[str, Any]:
+    day: str, params: dict[str, Any], run_dir: Path, catalog_db: str | None = None,
+    s11_session: str | None = None,
+) -> dict[str, Any]:
     """Compute one day's receiver calibration with edges-pipeline (``params``:
     the full settings, by section). Writes
     ``rcal.h5`` (:func:`write_solution`) and ``result.json``
@@ -270,7 +271,7 @@ def write_solution(path: Path, cal: Any, t_load: float, t_load_ns: float) -> Non
     write_product(path, {}, arrays, {"t_load": t_load, "t_load_ns": t_load_ns})
 
 
-def load_calibrator(spec: Dict[str, Any]) -> Tuple[Any, float, float]:
+def load_calibrator(spec: dict[str, Any]) -> tuple[Any, float, float]:
     """``(calibrator, t_load, t_load_ns)`` of an observation's calibration.
 
     ``spec`` (``calibration.json`` of the observation run) names an rcal
@@ -286,8 +287,8 @@ def load_calibrator(spec: Dict[str, Any]) -> Tuple[Any, float, float]:
 # Stage 2: observation (one night)
 # ---------------------------------------------------------------------------
 def run_observation(
-    inputs: Dict[str, Any], calibration: Dict[str, Any], run_dir: Path, params: Dict[str, Any]
-) -> Dict[str, Any]:
+    inputs: dict[str, Any], calibration: dict[str, Any], run_dir: Path, params: dict[str, Any]
+) -> dict[str, Any]:
     """Calibrate one night of antenna spectra. Returns (and writes) ``result.json``.
 
     ``calibration``: which receiver calibration (see :func:`load_calibrator`).
@@ -314,7 +315,7 @@ def run_observation(
         print(f"[run] input issue: {issue}")
 
     means = {k: _Mean() for k in ("pant", "pload", "plns", "q", "r", "tuncal", "tcal")}
-    wf_rows: Dict[str, List[np.ndarray]] = {"q": [], "tcal": [], "time_unix": [], "lst": []}
+    wf_rows: dict[str, list[np.ndarray]] = {"q": [], "tcal": [], "time_unix": [], "lst": []}
     freqs_mhz = None
     ant_model = gamma_ant = None
     per_file = []
@@ -404,7 +405,7 @@ def run_observation(
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         description="EDGES-3 calibration (non-default settings) / observation stage."
     )
@@ -447,7 +448,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 #: Observation parameters (runs_api.PARAMS checks the same names and ranges).
-DEFAULT_PARAMS: Dict[str, Any] = {
+DEFAULT_PARAMS: dict[str, Any] = {
     "ant_s11_fstart": DEFAULT_ANT_S11_FSTART,
     "ant_s11_fstop": DEFAULT_ANT_S11_FSTOP,
     "ant_s11_nterms": DEFAULT_ANT_S11_NTERMS,
