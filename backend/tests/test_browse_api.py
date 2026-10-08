@@ -30,7 +30,10 @@ def client(settings, monkeypatch):
 
 
 def test_deployments(client):
-    assert client.get("/api/browse/deployments").json() == [{"name": DEP, "label": "EDGES-3 (test)"}]
+    assert client.get("/api/browse/deployments").json() == [
+        {"name": DEP, "label": "EDGES-3 (test)", "band_mhz": None}]
+    # every offered EDGES-2 antenna has a band
+    assert all(browse_api.BANDS_MHZ.get(d) for d in browse_api.DEPLOYMENTS if d.startswith("edges2"))
     assert client.get("/api/browse/edges2-low2-mro/overview").status_code == 404  # not offered
 
 

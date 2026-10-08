@@ -137,13 +137,15 @@ export default function Browse() {
                 onPick={(d) => { const t = unixOf(String(d)); open(t - 3 * DAY, t + 4 * DAY) }} />}
       </section>
 
-      {start && end && <RangeView dep={dep} start={start} end={end} onRange={open} />}
+      {start && end && <RangeView dep={dep} start={start} end={end} onRange={open}
+        band={deps?.find((d) => d.name === dep)?.band_mhz ?? null} />}
     </div>
   )
 }
 
-function RangeView({ dep, start, end, onRange }: {
+function RangeView({ dep, start, end, onRange, band }: {
   dep: string; start: string; end: string; onRange: (t0: number, t1: number) => void
+  band: [number, number] | null
 }) {
   const t0 = unixOf(start), t1 = unixOf(end)
   const qs = `start=${start}&end=${end}`
@@ -269,7 +271,7 @@ function RangeView({ dep, start, end, onRange }: {
               xRange={shown} onXRange={setView} />}
       </section>
 
-      <QuickLookView dep={dep} window={shown} />
+      <QuickLookView dep={dep} window={shown} band={band} />
 
       {r && r.files.length > 0 && (
         <section className="border rounded p-2">
@@ -325,9 +327,12 @@ const STATS: [WaterfallStat, string][] = [
 ]
 
 /** The pipeline's quick-look Q waterfall of the times shown (up to QL_MAX_DAYS). */
-function QuickLookView({ dep, window: [w0, w1] }: { dep: string; window: [number, number] }) {
+function QuickLookView({ dep, window: [w0, w1], band }: {
+  dep: string; window: [number, number]; band: [number, number] | null
+}) {
   const [stat, setStat] = useState<WaterfallStat>("median")
   const [relative, setRelative] = useState(false)
+  const [full, setFull] = useState(false) // the whole 40-200 MHz, not the antenna's band
   const short = w1 - w0 <= QL_MAX_DAYS * DAY
   // whole minutes, so a re-render never refetches the same window
   const a = Math.floor(w0 / 60) * 60, b = Math.ceil(w1 / 60) * 60
@@ -335,10 +340,13 @@ function QuickLookView({ dep, window: [w0, w1] }: { dep: string; window: [number
     short ? `/api/browse/${dep}/quicklook?start=${a}&end=${b}${stat === "median" ? "" : `&waterfall=${stat}`}` : null)
   const wf = useMemo(() => {
     if (!ql?.waterfall_q || !ql.time_unix || !ql.freq_mhz) return null
-    let z: number[][] = decodeRows(ql.waterfall_q).map((row) => Array.from(row))
+    // only the channels shown, so they alone set the colour scale (percentiles)
+    const f = nums(ql.freq_mhz)
+    const keep = f.map((x) => !band || full || (x >= band[0] && x <= band[1]))
+    let z: number[][] = decodeRows(ql.waterfall_q).map((row) => Array.from(row).filter((_, j) => keep[j]))
     if (relative) z = minusChannelMedian(z)
-    return { z, times: ql.time_unix.map((t) => utc(t) ?? ""), freqs: nums(ql.freq_mhz) }
-  }, [ql, relative])
+    return { z, times: ql.time_unix.map((t) => utc(t) ?? ""), freqs: f.filter((_, j) => keep[j]) }
+  }, [ql, relative, band, full])
   return (
     <section className="border rounded p-2">
       <div className="d-flex flex-wrap align-items-center gap-2 mb-1">
@@ -354,6 +362,16 @@ function QuickLookView({ dep, window: [w0, w1] }: { dep: string; window: [number
           <input type="checkbox" className="form-check-input" checked={relative} onChange={(e) => setRelative(e.target.checked)} />
           <span className="form-check-label">minus each channel's median</span>
         </label>
+        {band && (
+          <div className="btn-group btn-group-sm" role="group" aria-label="Frequencies">
+            <button className={`btn ${!full ? "btn-primary" : "btn-outline-primary"}`} onClick={() => setFull(false)}>
+              Antenna band {band[0]}–{band[1]} MHz
+            </button>
+            <button className={`btn ${full ? "btn-primary" : "btn-outline-primary"}`} onClick={() => setFull(true)}>
+              Full 40–200 MHz
+            </button>
+          </div>
+        )}
       </div>
       {!short ? (
         <div className="small text-muted p-2">
@@ -373,7 +391,10 @@ function QuickLookView({ dep, window: [w0, w1] }: { dep: string; window: [number
               <p className="small text-muted mb-0">
                 {ql.n_rows} rows from {ql.files?.length ?? 0} files
                 {ql.decimation && ql.decimation > 1 ? ` (up to ${ql.decimation} cycles averaged per row, never across a gap)` : ""};
-                each 0.5 MHz bin is the {ql.waterfall_stat} of its ~80 channels.
+                each 0.5 MHz bin is the {ql.waterfall_stat} of its ~80 channels. Colours span the 2nd–98th
+                percentiles of what is shown, set per range: the Q level differs between periods of the record
+                (setup changes, edges-database DATA_ISSUES #36).
+                {band && " The antenna's band is from the EDGES papers (to be confirmed with the team)."}
               </p>
             </>
           )}

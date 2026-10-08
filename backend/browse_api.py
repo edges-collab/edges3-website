@@ -56,6 +56,15 @@ DEPLOYMENTS: dict[str, str] = {
     # confirmed (edges-database ISSUES #35), so listed on its own
     "edges2-low2-128k-mro": "EDGES-2 low2 (128k spectrometer, 2024–)",
 }
+#: Each antenna's design/analysis band (MHz) from the EDGES papers, where the
+#: page's waterfall starts (the full 40-200 MHz is one click away). Not in the
+#: catalog, and still to be confirmed with the team (edges-database plans/05,
+#: "EDGES-2 antennas: bands"). None: show everything.
+BANDS_MHZ: dict[str, tuple[float, float] | None] = {
+    "edges3-mro": None,
+    "edges2-low2-mro": (50.0, 100.0),
+    "edges2-low2-128k-mro": (50.0, 100.0),
+}
 #: The catalog housekeeping source of each receiver's own log (EDGES-2:
 #: the *_sensors.txt files, once the catalog ingests them).
 HK_SOURCE: dict[str, str] = {
@@ -258,8 +267,9 @@ def build_overview(cat: Any, deployment: str) -> dict[str, Any]:
 # Endpoints
 # ---------------------------------------------------------------------------
 @router.get("/deployments")
-def deployments() -> list[dict[str, str]]:
-    return [{"name": k, "label": v} for k, v in DEPLOYMENTS.items()]
+def deployments() -> list[dict[str, Any]]:
+    """The receivers offered, with their band (MHz; None: the full range)."""
+    return [{"name": k, "label": v, "band_mhz": BANDS_MHZ.get(k)} for k, v in DEPLOYMENTS.items()]
 
 
 @router.get("/{deployment}/overview")

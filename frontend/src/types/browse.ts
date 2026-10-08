@@ -3,7 +3,8 @@
  */
 type Num = number | null
 
-export type Deployment = { name: string; label: string }
+/** A receiver; ``band_mhz``: its antenna's band (null: show everything). */
+export type Deployment = { name: string; label: string; band_mhz: [number, number] | null }
 
 export type Overview = {
   deployment: string
