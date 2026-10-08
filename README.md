@@ -254,9 +254,11 @@ Four tabs:
   two months or less, or click a day, for the range: each spectrum file's
   span (by load), the S11 sessions, the receiver's own housekeeping
   (EDGES-3: the temperature log; EDGES-2: its sensor files) and the site's
-  weather; a file table (click a file for its per-cycle ADC extremes and
-  data drops) and the S11 sessions (click one for its raw, uncalibrated
-  |S11| and phase). No spectra are read here.
+  weather (both panels zoom together); the pipeline's quick-look Q
+  waterfall of the times shown (up to 8 days; median, mean or max binning,
+  optionally minus each channel's median); a file table (click a file for
+  its per-cycle ADC extremes and data drops) and the S11 sessions (click one
+  for its raw, uncalibrated |S11| and phase). No spectrum file is read here.
 * **Status** (`/status`): whether the data packages work, and what the
   job queue is doing.
 

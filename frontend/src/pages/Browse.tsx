@@ -7,9 +7,10 @@
  *   sessions, data drops and the largest ADC value. Zoom in to two months or
  *   less, or click a day, to open it.
  * - The range: each spectrum file's span (by load), the S11 sessions, the
- *   receiver's own housekeeping and the site's weather; a file table (click
- *   a file for its cycles) and the S11 sessions (click one for its raw
- *   |S11| and phase).
+ *   receiver's own housekeeping and the site's weather (zoom-linked); the
+ *   quick-look Q waterfall of the times shown (up to 8 days); a file table
+ *   (click a file for its cycles) and the S11 sessions (click one for its
+ *   raw |S11| and phase).
  *
  * URL: ``/raw?dep=<deployment>&start=YYYY-MM-DD&end=YYYY-MM-DD``.
  */
@@ -18,6 +19,9 @@ import { useSearchParams } from "react-router"
 import type { Data } from "plotly.js"
 import TimeStrips, { utc, type Strip } from "../components/TimeStrips"
 import StackedPlot, { MUTED, SERIES, type Panel } from "../components/StackedPlot"
+import Waterfall from "../components/Waterfall"
+import { decodeRows, minusChannelMedian } from "../utils/nightData"
+import type { QuickLook, WaterfallStat } from "../types/night"
 import { useJson } from "../hooks/useJson"
 import { magPhase } from "../utils/robust"
 import { Link } from "react-router"
@@ -27,6 +31,7 @@ import type {
 
 const CRITICAL = "#d03b3b"
 const MAX_RANGE_DAYS = 62
+const QL_MAX_DAYS = 8
 const DEFAULT_DEPLOYMENT = "edges3-mro"
 /** Housekeeping not plotted (not temperatures or voltages one reads by eye). */
 const HK_SKIP = new Set(["pr59_current", "setpoint", "thermal_control"])
@@ -203,7 +208,9 @@ function RangeView({ dep, start, end, onRange }: {
       }
       for (const [title, items] of groups) {
         out.push({ title, weight: 0.8, traces: items.map(([k, v], i) => ({
-          type: "scatter", mode: "lines", x: v.time_unix.map(utc), y: nums(v.value), name: pretty(k),
+          // sparse logs (EDGES-2: one reading per S11 session) as points
+          type: "scatter", mode: v.value.length < 300 ? "lines+markers" : "lines", marker: { size: 4 },
+          x: v.time_unix.map(utc), y: nums(v.value), name: pretty(k),
           line: { color: [SERIES[0], SERIES[1], SERIES[2], MUTED][i % 4], width: 1 },
         })) })
       }
@@ -262,6 +269,8 @@ function RangeView({ dep, start, end, onRange }: {
               xRange={shown} onXRange={setView} />}
       </section>
 
+      <QuickLookView dep={dep} window={shown} />
+
       {r && r.files.length > 0 && (
         <section className="border rounded p-2">
           <h3 className="h6">Spectrum files</h3>
@@ -308,6 +317,67 @@ function RangeView({ dep, start, end, onRange }: {
         </section>
       )}
     </>
+  )
+}
+
+const STATS: [WaterfallStat, string][] = [
+  ["median", "median (RFI removed)"], ["mean", "mean (RFI kept)"], ["max", "max (RFI kept)"],
+]
+
+/** The pipeline's quick-look Q waterfall of the times shown (up to QL_MAX_DAYS). */
+function QuickLookView({ dep, window: [w0, w1] }: { dep: string; window: [number, number] }) {
+  const [stat, setStat] = useState<WaterfallStat>("median")
+  const [relative, setRelative] = useState(false)
+  const short = w1 - w0 <= QL_MAX_DAYS * DAY
+  // whole minutes, so a re-render never refetches the same window
+  const a = Math.floor(w0 / 60) * 60, b = Math.ceil(w1 / 60) * 60
+  const { data: ql, error } = useJson<QuickLook>(
+    short ? `/api/browse/${dep}/quicklook?start=${a}&end=${b}${stat === "median" ? "" : `&waterfall=${stat}`}` : null)
+  const wf = useMemo(() => {
+    if (!ql?.waterfall_q || !ql.time_unix || !ql.freq_mhz) return null
+    let z: number[][] = decodeRows(ql.waterfall_q).map((row) => Array.from(row))
+    if (relative) z = minusChannelMedian(z)
+    return { z, times: ql.time_unix.map((t) => utc(t) ?? ""), freqs: nums(ql.freq_mhz) }
+  }, [ql, relative])
+  return (
+    <section className="border rounded p-2">
+      <div className="d-flex flex-wrap align-items-center gap-2 mb-1">
+        <h3 className="h6 m-0">Quick-look waterfall (Q)</h3>
+        <div className="btn-group btn-group-sm" role="group" aria-label="Binning">
+          {STATS.map(([k, label]) => (
+            <button key={k} className={`btn ${stat === k ? "btn-primary" : "btn-outline-primary"}`}
+              disabled={k !== "median" && ql?.rfi_waterfalls === false}
+              onClick={() => { setStat(k); if (k === "max") setRelative(true) }}>{label}</button>
+          ))}
+        </div>
+        <label className="form-check form-check-inline small m-0">
+          <input type="checkbox" className="form-check-input" checked={relative} onChange={(e) => setRelative(e.target.checked)} />
+          <span className="form-check-label">minus each channel's median</span>
+        </label>
+      </div>
+      {!short ? (
+        <div className="small text-muted p-2">
+          Zoom the figures above to {QL_MAX_DAYS} days or less to see the waterfall of those times.
+        </div>
+      ) : error ? <div className="small text-danger">{error}</div>
+        : !ql ? <div className="small text-muted p-2">Loading the quick-look products…</div>
+          : !ql.available || !wf ? (
+            <div className="small text-muted p-2">
+              No quick-look products here: {ql.reason ?? "none"}.
+            </div>
+          ) : (
+            <>
+              {ql.waterfall_note && <div className="small text-muted">{ql.waterfall_note}</div>}
+              <Waterfall title="" times={wf.times} freqs={wf.freqs} z={wf.z} diverging={relative}
+                unit={relative ? "Q − median" : "Q"} height={380} xTitle="UTC" />
+              <p className="small text-muted mb-0">
+                {ql.n_rows} rows from {ql.files?.length ?? 0} files
+                {ql.decimation && ql.decimation > 1 ? ` (up to ${ql.decimation} cycles averaged per row, never across a gap)` : ""};
+                each 0.5 MHz bin is the {ql.waterfall_stat} of its ~80 channels.
+              </p>
+            </>
+          )}
+    </section>
   )
 }
 

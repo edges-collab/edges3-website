@@ -369,7 +369,7 @@ def _data_version(prod: Any) -> tuple:
 # ---------------------------------------------------------------------------
 def _quicklook(
     prod: Any, t0: float, t1: float, load: str, p0: bool, max_rows: int,
-    waterfall: str = "median", probe_rfi: bool = False,
+    waterfall: str = "median", probe_rfi: bool = False, deployment: str = DEPLOYMENT,
 ) -> dict[str, Any]:
     """The QL waterfalls of a range. ``waterfall_q`` is the Q waterfall binned
     by ``waterfall`` (:data:`Q_WATERFALLS`); products without that one (QL
@@ -385,7 +385,7 @@ def _quicklook(
             # Decimation never averages across a gap; ``segment`` labels the runs.
             ql = prod.quicklook(
                 t0, t1, load=load, quantities=("waterfall_q", *extra, *p0q),
-                deployment=DEPLOYMENT, max_rows=max_rows,
+                deployment=deployment, max_rows=max_rows,
             )
             rfi = bool(extra) or None
         except KeyError:  # products older than QL version 3
@@ -393,7 +393,7 @@ def _quicklook(
                 raise
             ql = prod.quicklook(
                 t0, t1, load=load, quantities=("waterfall_q", *p0q),
-                deployment=DEPLOYMENT, max_rows=max_rows,
+                deployment=deployment, max_rows=max_rows,
             )
             rfi = False
             if key != "waterfall_q":

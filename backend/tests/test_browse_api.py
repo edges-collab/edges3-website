@@ -104,3 +104,13 @@ def test_s11_sessions_and_housekeeping(client):
     assert hk["available"] and hk["source"] == "templog"
     assert hk["series"]["hot_load_temperature"]["value"][0] == pytest.approx(111.0)
     assert hk["series"]["hot_load_temperature"]["unit"]
+
+
+def test_quicklook(client):
+    ql = client.get(f"/api/browse/{DEP}/quicklook", params={"start": NIGHT, "end": "2025-04-11"}).json()
+    assert ql["available"] and ql["waterfall_stat"] == "median" and ql["rfi_waterfalls"] is True
+    mx = client.get(f"/api/browse/{DEP}/quicklook",
+                    params={"start": NIGHT, "end": "2025-04-11", "waterfall": "max"}).json()
+    assert mx["waterfall_stat"] == "max" and mx["n_rows"] == ql["n_rows"]
+    too_long = {"start": "2025-04-01", "end": "2025-04-20"}
+    assert client.get(f"/api/browse/{DEP}/quicklook", params=too_long).status_code == 400

@@ -21,6 +21,9 @@ GET /{deployment}/range?start=&end=    files and S11 sessions in a range (at
                                        most :data:`MAX_RANGE_DAYS` days)
 GET /{deployment}/weather?start=&end=  the site's weather log in that range
 GET /{deployment}/housekeeping?start=&end=  the receiver's own log in that range
+GET /{deployment}/quicklook?start=&end=&waterfall=  the QL Q waterfall of a
+                                       range (at most :data:`QL_MAX_DAYS` days;
+                                       median, mean or max binning)
 GET /{deployment}/cycles/{file_id}     one spectrum file's cycles: ADC extremes
                                        and data drops per switch position
 GET /{deployment}/s11?session_id=|stamp=  one S11 session's files, as
@@ -38,7 +41,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import numpy as np
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 import products_api
 from products_api import _db_errors, _float_list, _heavy_slot, _parse_time, _scalar
@@ -63,6 +66,10 @@ HK_SOURCE: dict[str, str] = {
 #: Housekeeping points sent per quantity for a range at most.
 MAX_HK_POINTS = 3000
 MAX_RANGE_DAYS = 62
+#: The QL waterfall of a range is read only for ranges this short (EDGES-2
+#: files are up to 24 h, ~3,400 cycles each), and decimated to MAX_QL_ROWS.
+QL_MAX_DAYS = 8
+MAX_QL_ROWS = 1500
 #: Weather points sent for a range at most (the log is every 5 min).
 MAX_WEATHER_POINTS = 6000
 #: The labels of a raw EDGES-2 S11 session (``s11/daily``): the antenna and
@@ -325,6 +332,22 @@ def weather(deployment: str, start: str, end: str) -> dict[str, Any]:
         "time_unix": _float_list(w.t_unix, 0),
         "series": {c: _float_list(w[c], 2) for c in cols},
     }
+
+
+@router.get("/{deployment}/quicklook")
+def quicklook(
+    deployment: str, start: str, end: str,
+    waterfall: str = Query("median", pattern=products_api.WATERFALL_PATTERN),
+) -> dict[str, Any]:
+    """The pipeline's quick-look Q waterfall of a range (see products_api)."""
+    dep = _deployment(deployment)
+    t0, t1 = _range(start, end)
+    if t1 - t0 > QL_MAX_DAYS * 86400:
+        raise HTTPException(status_code=400, detail=f"quick-look ranges are limited to {QL_MAX_DAYS} days")
+    prod = products_api.get_products()
+    with _heavy_slot(), _db_errors():
+        return products_api._quicklook(prod, t0, t1, "ant", False, MAX_QL_ROWS, waterfall,
+                                       probe_rfi=True, deployment=dep)
 
 
 @router.get("/{deployment}/cycles/{file_id}")

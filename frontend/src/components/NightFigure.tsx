@@ -20,7 +20,7 @@ import { useMemo } from "react"
 import type { Data, Layout } from "plotly.js"
 import Plot from "../utils/plotComponent"
 import type { NightPayload } from "../types/night"
-import { decodeRows, lstTicks, robustRange, siteTimes, toSiteTime } from "../utils/nightData"
+import { decodeRows, lstTicks, minusChannelMedian, robustRange, siteTimes, toSiteTime } from "../utils/nightData"
 
 // Reference categorical slots 1-3 (validated all-pairs) and status colours.
 const SERIES = ["#2a78d6", "#eb6834", "#1baf7a"]
@@ -37,16 +37,6 @@ type Props = {
   relative?: boolean
 }
 
-/** Each column minus its NaN-median over the rows. */
-function minusChannelMedian(rows: number[][]): number[][] {
-  const n = rows[0]?.length ?? 0
-  const med = new Array<number>(n)
-  for (let j = 0; j < n; j++) {
-    const col = rows.map((r) => r[j]).filter(Number.isFinite).sort((a, b) => a - b)
-    med[j] = col.length ? col[Math.floor((col.length - 1) / 2)] : NaN
-  }
-  return rows.map((r) => r.map((v, j) => v - med[j]))
-}
 
 type Strip = { key: string; weight: number; title: string; log?: boolean }
 

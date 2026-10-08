@@ -100,3 +100,14 @@ export function shiftDate(date: string, days: number): string {
   d.setUTCDate(d.getUTCDate() + days)
   return d.toISOString().slice(0, 10)
 }
+
+/** Each column minus its NaN-median over the rows. */
+export function minusChannelMedian(rows: number[][]): number[][] {
+  const n = rows[0]?.length ?? 0
+  const med = new Array<number>(n)
+  for (let j = 0; j < n; j++) {
+    const col = rows.map((r) => r[j]).filter(Number.isFinite).sort((a, b) => a - b)
+    med[j] = col.length ? col[Math.floor((col.length - 1) / 2)] : NaN
+  }
+  return rows.map((r) => r.map((v, j) => v - med[j]))
+}
