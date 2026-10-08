@@ -9,10 +9,10 @@ calibrations from edges-pipeline, and nights calibrated with them.
 |---|---|
 | `config.py` | **All paths and tunable defaults live here.** Env-driven; see the top-level `README.md` for the full table. |
 | `backend_api.py` | FastAPI app: the routers below, `/health`, `/pipeline/status`, the `/data` static mount of `$EDGES_OUTPUT_ROOT` and the SPA fallback. |
-| `products_api.py` | Read-only `/api/night`, `/api/nights/latest`, `/api/quicklook`, `/api/l1`, `/api/housekeeping`, `/api/status` over the catalog and pipeline products (Nightly Overview). Needs the optional `edges-catalog`/`edges-pipeline` packages. |
+| `products_api.py` | Read-only `/api/night`, `/api/nights/latest`, `/api/quicklook`, `/api/l1`, `/api/housekeeping`, `/api/status` over the catalog and pipeline products (EDGES-3's night figure and file QA on the Night tab). Needs the optional `edges-catalog`/`edges-pipeline` packages. |
 | `runs_api.py` | `/api/calibrations/...` (stored calibrations, and computations with other settings as background jobs), `/api/observations/...` (nights, background jobs), `/api/runs/...`. |
 | `calibrations.py` | Receiver calibrations from edges-pipeline: the settings form and its validation, the day list with the pipeline's reasons for gaps (cached), the JSON a page plots (stored or computed alike) and the loads' cycles from L1. |
-| `browse_api.py` | `/api/browse/...` for the Raw Data page (EDGES-3, EDGES-2 low2): a receiver's record per day, files, cycles, raw S11 sessions, housekeeping and weather, from the catalog only. |
+| `browse_api.py` | `/api/browse/...` for every receiver (EDGES-3, the EDGES-2 antennas): the receivers offered (with band, site clock and what the site has for each), night bounds and the nights with data, the record per day, files, cycles, raw S11 sessions, housekeeping, weather and quick-look waterfalls. |
 | `catalog_inputs.py` | Nights, antenna files and S11 sessions from the EDGES catalog (nothing scans the raw data tree). |
 | `run_single_day.py` | Two stages: `--stage calibration` (a receiver calibration with non-default settings, by `rcal.calibrate_day`) and `--stage observation` (a night calibrated with a stored or computed calibration). |
 | `tests/` | pytest tests on a synthetic catalog and products database (with fake stored calibrations), and of the job runner (`rcal.calibrate_day` mocked in `tests/fake_pipeline.py`). |

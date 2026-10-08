@@ -1,8 +1,10 @@
 /**
- * Several strips in one Plotly figure sharing a UTC time axis (zooming one
- * zooms all), each with its own y axis. Reports the visible time range when
- * the user zooms (``onXRange``, POSIX seconds; null when reset) and the
- * ``customdata`` of a clicked point (``onPick``).
+ * Several strips in one Plotly figure sharing a time axis (zooming one
+ * zooms all), each with its own y axis. The axis is UTC, or a site clock
+ * (``utcOffsetHours``; the traces' times must then come from ``clock`` with
+ * the same offset). Reports the visible time range when the user zooms
+ * (``onXRange``, POSIX seconds; null when reset) and the ``customdata`` of a
+ * clicked point (``onPick``).
  */
 import { useMemo } from "react"
 import type { Data, Layout, PlotMouseEvent, PlotRelayoutEvent } from "plotly.js"
@@ -27,19 +29,29 @@ type Props = {
   barmode?: "group" | "stack" | "overlay"
   /** the time range shown (POSIX s); figures given the same one line up */
   xRange?: [number, number] | null
+  /** the axis's clock (hours from UTC) and its title */
+  utcOffsetHours?: number
+  timeTitle?: string
   onXRange?: (r: [number, number] | null) => void
   onPick?: (customdata: unknown) => void
 }
 
-/** POSIX seconds -> a UTC date string Plotly reads as a date. */
-export const utc = (t: number | null): string | null =>
-  t === null ? null : new Date(t * 1000).toISOString().slice(0, 19).replace("T", " ")
+/** POSIX seconds -> a date string (in a clock ``off`` hours from UTC) Plotly reads as a date. */
+export const clock = (off: number) => (t: number | null): string | null =>
+  t === null ? null : new Date((t + off * 3600) * 1000).toISOString().slice(0, 19).replace("T", " ")
 
-/** A Plotly date string (UTC, no zone) -> POSIX seconds. */
-const toUnix = (s: unknown): number => Date.parse(`${String(s).replace(" ", "T")}${String(s).length <= 10 ? "" : "Z"}`) / 1000
+/** POSIX seconds -> a UTC date string. */
+export const utc = clock(0)
 
-export default function TimeStrips({ strips, height = 600, revision, barmode, xRange, onXRange, onPick }: Props) {
+/** A Plotly date string (no zone, in a clock ``off`` hours from UTC) -> POSIX seconds. */
+const toUnix = (s: unknown, off: number): number =>
+  Date.parse(`${String(s).replace(" ", "T").slice(0, 19)}${String(s).length <= 10 ? "T00:00:00" : ""}Z`) / 1000 - off * 3600
+
+export default function TimeStrips({
+  strips, height = 600, revision, barmode, xRange, onXRange, onPick, utcOffsetHours = 0, timeTitle = "UTC",
+}: Props) {
   const { data, layout } = useMemo(() => {
+    const at = clock(utcOffsetHours)
     const gap = 0.04
     const total = strips.reduce((s, x) => s + (x.weight ?? 1), 0)
     const usable = 1 - gap * (strips.length - 1)
@@ -57,8 +69,8 @@ export default function TimeStrips({ strips, height = 600, revision, barmode, xR
       uirevision: `${revision}|${xRange ? xRange.join("-") : ""}`,
       barmode,
       xaxis: {
-        type: "date", gridcolor: GRID, title: { text: "UTC" }, anchor: `y${strips.length > 1 ? strips.length : ""}`,
-        ...(xRange ? { range: [utc(xRange[0]), utc(xRange[1])], autorange: false } : {}),
+        type: "date", gridcolor: GRID, title: { text: timeTitle }, anchor: `y${strips.length > 1 ? strips.length : ""}`,
+        ...(xRange ? { range: [at(xRange[0]), at(xRange[1])], autorange: false } : {}),
       },
     }
     const out: Data[] = []
@@ -80,7 +92,7 @@ export default function TimeStrips({ strips, height = 600, revision, barmode, xR
       for (const t of s.traces) out.push({ ...t, xaxis: "x", yaxis: ax } as Data)
     })
     return { data: out, layout: L as Partial<Layout> }
-  }, [strips, height, revision, barmode, xRange])
+  }, [strips, height, revision, barmode, xRange, utcOffsetHours, timeTitle])
 
   return (
     <Plot
@@ -93,7 +105,9 @@ export default function TimeStrips({ strips, height = 600, revision, barmode, xR
         if (!onXRange) return
         const r = e as Record<string, unknown>
         if (r["xaxis.autorange"]) onXRange(null)
-        else if (r["xaxis.range[0]"] !== undefined) onXRange([toUnix(r["xaxis.range[0]"]), toUnix(r["xaxis.range[1]"])])
+        else if (r["xaxis.range[0]"] !== undefined) {
+          onXRange([toUnix(r["xaxis.range[0]"], utcOffsetHours), toUnix(r["xaxis.range[1]"], utcOffsetHours)])
+        }
       }}
       onClick={(e: PlotMouseEvent) => {
         const p = e.points[0] as unknown as { customdata?: unknown }

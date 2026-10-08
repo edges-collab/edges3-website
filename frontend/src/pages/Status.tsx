@@ -2,8 +2,8 @@
  * Status: whether the data packages work, and what the run queue is doing.
  */
 import { useEffect, useState } from "react"
-import { Link } from "react-router"
 import { BASE_URL } from "../utils/baseURL"
+import { VIEWS } from "../utils/views"
 
 type Status = {
   data_packages: boolean
@@ -12,7 +12,7 @@ type Status = {
   runs: string[]
 }
 
-export default function Home() {
+export default function Status() {
   const [status, setStatus] = useState<Status | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -26,12 +26,14 @@ export default function Home() {
   return (
     <div className="d-flex flex-column p-3 gap-3">
       <div className="border rounded p-3">
-        <h2>EDGES-3 site</h2>
+        <h2>The EDGES site</h2>
+        <p className="mb-1">
+          Choose a receiver (EDGES-3, or an EDGES-2 antenna) at the top left, then one of its views:
+        </p>
         <ul className="mb-0">
-          <li><Link to="/">Nightly Overview</Link>: the latest night at a glance, from precomputed quick-look and L1 products.</li>
-          <li><Link to="/calibrations">Calibrations</Link>: a day's receiver calibration, stored by the pipeline (or computed with other settings).</li>
-          <li><Link to="/data">Detailed Data View</Link>: one night calibrated with the selected calibration.</li>
-          <li><Link to="/raw">Raw Data</Link>: a receiver's whole record from the catalog (EDGES-3; EDGES-2 low2 so far).</li>
+          {VIEWS.map((v) => (
+            <li key={v.key}><strong>{v.label}</strong>: {v.help}{v.needs ? " (EDGES-3 only so far)" : ""}.</li>
+          ))}
         </ul>
       </div>
       <div className="border rounded p-3">

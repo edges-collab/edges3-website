@@ -2,7 +2,7 @@
 Browse a receiver's raw data from the catalog
 =============================================
 
-The raw-data overview of a receiver (EDGES-3, EDGES-2 low2), from the EDGES
+The raw data of a receiver (EDGES-3, the EDGES-2 antennas), from the EDGES
 catalog only: what was recorded when (antenna and calibration-load
 spectra), the per-file and per-cycle quality numbers that spectrum
 extraction adds (``v_spectra``, ``Catalog.acq_cycles``), the S11 sessions,
@@ -13,7 +13,10 @@ time.
 
 Endpoints (prefix ``/api/browse``)
 ----------------------------------
-GET /deployments                       the receivers this page offers
+GET /deployments                       the receivers offered, with what each has
+                                       (band, site clock, night products, calibration)
+GET /{deployment}/night?date=&nights=  a night's (or a few nights') bounds, and the
+                                       latest, previous and next nights with data
 GET /{deployment}/overview             per UTC day over the whole record: files,
                                        GB, hours and cycles of data, data drops,
                                        S11 sessions (cached)
@@ -29,20 +32,24 @@ GET /{deployment}/cycles/{file_id}     one spectrum file's cycles: ADC extremes
 GET /{deployment}/s11?session_id=|stamp=  one S11 session's files, as
                                        measured (raw, uncalibrated)
 
-Times are POSIX seconds (UTC); ``start``/``end`` also take ISO strings.
+Times are POSIX seconds (UTC); ``start``/``end`` also take ISO strings. A
+night is named by the site's local date of its evening and runs 18:00-06:00
+site time (as ``Products.night``).
 Only the deployments in :data:`DEPLOYMENTS` can be asked for.
 """
 
 from __future__ import annotations
 
+import bisect
 import math
 from collections import defaultdict
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta, timezone
 from typing import Any
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, Query
 
+import calibrations
 import products_api
 from products_api import _db_errors, _float_list, _heavy_slot, _parse_time, _scalar
 
@@ -51,10 +58,15 @@ router = APIRouter(prefix="/api/browse", tags=["browse"])
 #: The receivers the browse page offers: deployment -> label (more to come).
 DEPLOYMENTS: dict[str, str] = {
     "edges3-mro": "EDGES-3",
+    "edges2-low1-mro": "EDGES-2 low1",
     "edges2-low2-mro": "EDGES-2 low2",
     # probably the same antenna with a 131,072-channel spectrometer: not yet
     # confirmed (edges-database ISSUES #35), so listed on its own
     "edges2-low2-128k-mro": "EDGES-2 low2 (128k spectrometer, 2024–)",
+    "edges2-low3-mro": "EDGES-2 low3",
+    "edges2-mid-mro": "EDGES-2 mid",
+    "edges2-high-mro": "EDGES-2 high",
+    # (edges2-low2-45-mro has S11 files only, no spectra)
 }
 #: Each antenna's design/analysis band (MHz) from the EDGES papers, where the
 #: page's waterfall starts (the full 40-200 MHz is one click away). Not in the
@@ -62,16 +74,27 @@ DEPLOYMENTS: dict[str, str] = {
 #: "EDGES-2 antennas: bands"). None: show everything.
 BANDS_MHZ: dict[str, tuple[float, float] | None] = {
     "edges3-mro": None,
+    "edges2-low1-mro": (50.0, 100.0),
     "edges2-low2-mro": (50.0, 100.0),
     "edges2-low2-128k-mro": (50.0, 100.0),
+    "edges2-low3-mro": (50.0, 100.0),
+    "edges2-mid-mro": (60.0, 160.0),
+    "edges2-high-mro": (90.0, 190.0),
 }
 #: The catalog housekeeping source of each receiver's own log (EDGES-2:
 #: the *_sensors.txt files, once the catalog ingests them).
 HK_SOURCE: dict[str, str] = {
     "edges3-mro": "templog",
-    "edges2-low2-mro": "sensors",
-    "edges2-low2-128k-mro": "sensors",
+    **{k: "sensors" for k in DEPLOYMENTS if k.startswith("edges2")},
 }
+#: Each receiver's site clock: UTC offset (hours) and its name. All are at
+#: the MRO so far (AWST, no daylight saving).
+SITE_CLOCK: dict[str, tuple[float, str]] = {k: (8.0, "AWST") for k in DEPLOYMENTS}
+#: A night: 18:00 site time for 12 hours (the defaults of ``Products.night``).
+NIGHT_START_HOUR = 18
+NIGHT_HOURS = 12
+#: The most nights the night page shows at once.
+MAX_NIGHTS = 31
 #: Housekeeping points sent per quantity for a range at most.
 MAX_HK_POINTS = 3000
 MAX_RANGE_DAYS = 62
@@ -90,6 +113,24 @@ def _deployment(name: str) -> str:
     if name not in DEPLOYMENTS:
         raise HTTPException(status_code=404, detail=f"unknown deployment {name!r}")
     return name
+
+
+def _clock(deployment: str) -> tuple[float, str]:
+    return SITE_CLOCK.get(deployment, (0.0, "UTC"))
+
+
+def night_bounds(deployment: str, day: date) -> tuple[float, float]:
+    """The UTC bounds (POSIX s) of the night starting on the evening of ``day``."""
+    tz = timezone(timedelta(hours=_clock(deployment)[0]))
+    start = datetime.combine(day, time(0), tzinfo=tz) + timedelta(hours=NIGHT_START_HOUR)
+    return start.timestamp(), (start + timedelta(hours=NIGHT_HOURS)).timestamp()
+
+
+def night_of(deployment: str, t: float) -> date:
+    """The night (its evening's date) a time belongs to: before local noon,
+    the night that started the evening before."""
+    local = datetime.fromtimestamp(t, timezone(timedelta(hours=_clock(deployment)[0])))
+    return local.date() if local.hour >= 12 else local.date() - timedelta(days=1)
 
 
 def _range(start: str | None, end: str | None) -> tuple[float, float]:
@@ -263,27 +304,117 @@ def build_overview(cat: Any, deployment: str) -> dict[str, Any]:
     }
 
 
+def data_nights(cat: Any, deployment: str) -> list[str]:
+    """The nights (sorted ISO dates) that some antenna spectrum file overlaps
+    (a file before extraction: its name's time stamp)."""
+    acq = _acq_files(cat, deployment)
+    ant = acq[(acq.category == "science") & (acq.load.isna() | (acq.load == "ant"))]
+    out: set[str] = set()
+    for r in ant.itertuples():
+        a = float(r.t_start_unix) if _finite(r.t_start_unix) else float(r.stamp_unix)
+        b = float(r.t_end_unix) if _finite(r.t_end_unix) else a
+        if not _finite(a):
+            continue
+        d, last = night_of(deployment, a), night_of(deployment, b)
+        while d <= last:
+            n0, n1 = night_bounds(deployment, d)
+            if a < n1 and b >= n0:
+                out.add(d.isoformat())
+            d += timedelta(days=1)
+    return sorted(out)
+
+
+def _cached(kind: str, dep: str, build: Any) -> Any:
+    """``build(cat, dep)``, kept until the catalog or products change."""
+    prod = products_api.get_products()
+    key = (f"browse-{kind}", dep, products_api._data_version(prod))
+    hit = products_api._cache.get(key)
+    if hit is not None:
+        return hit
+    with _heavy_slot(), _db_errors(), products_api._open_catalog(prod) as cat:
+        out = build(cat, dep)
+    products_api._cache.put(key, out)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 @router.get("/deployments")
 def deployments() -> list[dict[str, Any]]:
-    """The receivers offered, with their band (MHz; None: the full range)."""
-    return [{"name": k, "label": v, "band_mhz": BANDS_MHZ.get(k)} for k, v in DEPLOYMENTS.items()]
+    """The receivers offered: their instrument, band (MHz; None: the full
+    range), site clock, and whether the site has the pipeline's night
+    products (L1: the night figure and file QA) and calibrations for them."""
+    return [
+        {
+            "name": k,
+            "label": v,
+            "instrument": "EDGES-3" if k.startswith("edges3") else "EDGES-2" if k.startswith("edges2") else "",
+            "band_mhz": BANDS_MHZ.get(k),
+            "utc_offset_hours": _clock(k)[0],
+            "timezone": _clock(k)[1],
+            "night_products": k == products_api.DEPLOYMENT,
+            "calibration": k == calibrations.DEPLOYMENT,
+        }
+        for k, v in DEPLOYMENTS.items()
+    ]
+
+
+@router.get("/{deployment}/night")
+def night(
+    deployment: str,
+    day: str | None = Query(None, alias="date", description="The first night's evening (YYYY-MM-DD); default: latest"),
+    nights: int = Query(1, ge=1, le=MAX_NIGHTS),
+) -> dict[str, Any]:
+    """The bounds of ``nights`` nights from ``date`` (UTC, POSIX s), and the
+    nights with antenna data around them: the latest (with night products,
+    the latest with quick-look products), the nearest before the first and
+    after the last."""
+    dep = _deployment(deployment)
+    have = _cached("nights", dep, data_nights)
+    latest = None
+    if dep == products_api.DEPLOYMENT:
+        with _db_errors():
+            ql = products_api._latest_night(products_api.get_products())
+        latest = night_of(dep, ql[0]) if ql else None
+    if latest is None and have:
+        latest = date.fromisoformat(have[-1])
+    if day:
+        try:
+            first = datetime.strptime(day, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD") from None
+        if not 2000 <= first.year <= 2100:
+            raise HTTPException(status_code=400, detail="date out of range")
+    elif latest is None:
+        raise HTTPException(status_code=404, detail="no antenna data for this receiver")
+    else:
+        first = latest
+    last = first + timedelta(days=nights - 1)
+    start, end = night_bounds(dep, first)[0], night_bounds(dep, last)[1]
+    i, j = bisect.bisect_left(have, first.isoformat()), bisect.bisect_right(have, last.isoformat())
+    off, tz = _clock(dep)
+    return {
+        "deployment": dep,
+        "date": first.isoformat(),
+        "last_date": last.isoformat(),
+        "nights": nights,
+        "start_unix": start,
+        "end_unix": end,
+        "utc_offset_hours": off,
+        "timezone": tz,
+        "latest_date": latest.isoformat() if latest else None,
+        "is_latest": latest is not None and first <= latest <= last,
+        "prev_date": have[i - 1] if i > 0 else None,
+        "next_date": have[j] if j < len(have) else None,
+        "first_date": have[0] if have else None,
+        "nights_with_data": j - i,
+    }
 
 
 @router.get("/{deployment}/overview")
 def overview(deployment: str) -> dict[str, Any]:
-    dep = _deployment(deployment)
-    prod = products_api.get_products()
-    key = ("browse-overview", dep, products_api._data_version(prod))
-    hit = products_api._cache.get(key)
-    if hit is not None:
-        return hit
-    with _heavy_slot(), _db_errors(), products_api._open_catalog(prod) as cat:
-        out = build_overview(cat, dep)
-    products_api._cache.put(key, out)
-    return out
+    return _cached("overview", _deployment(deployment), build_overview)
 
 
 @router.get("/{deployment}/range")

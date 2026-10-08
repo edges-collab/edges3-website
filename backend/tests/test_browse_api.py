@@ -30,8 +30,11 @@ def client(settings, monkeypatch):
 
 
 def test_deployments(client):
-    assert client.get("/api/browse/deployments").json() == [
-        {"name": DEP, "label": "EDGES-3 (test)", "band_mhz": None}]
+    assert client.get("/api/browse/deployments").json() == [{
+        "name": DEP, "label": "EDGES-3 (test)", "instrument": "EDGES-3", "band_mhz": None,
+        "utc_offset_hours": 8.0, "timezone": "AWST", "night_products": True, "calibration": True}]
+    # every offered receiver has a site clock
+    assert set(browse_api.DEPLOYMENTS) <= set(browse_api.SITE_CLOCK)
     # every offered EDGES-2 antenna has a band
     assert all(browse_api.BANDS_MHZ.get(d) for d in browse_api.DEPLOYMENTS if d.startswith("edges2"))
     assert client.get("/api/browse/edges2-low2-mro/overview").status_code == 404  # not offered
@@ -117,3 +120,27 @@ def test_quicklook(client):
     assert mx["waterfall_stat"] == "max" and mx["n_rows"] == ql["n_rows"]
     too_long = {"start": "2025-04-01", "end": "2025-04-20"}
     assert client.get(f"/api/browse/{DEP}/quicklook", params=too_long).status_code == 400
+
+
+def test_night(client):
+    from datetime import date
+
+    from edges_pipeline.products import Products
+
+    n = client.get(f"/api/browse/{DEP}/night", params={"date": NIGHT}).json()
+    # the same night as the pipeline's (18:00-06:00 AWST)
+    assert (n["start_unix"], n["end_unix"]) == Products.night(date.fromisoformat(NIGHT), deployment=DEP)
+    assert n["nights_with_data"] == 1 and n["prev_date"] is None and n["timezone"] == "AWST"
+    # the daytime file (13:00 AWST) is in no night; the calibration loads are not antenna data
+    assert n["first_date"] == NIGHT and n["next_date"] is None
+    # latest: the latest night with QL products (Products.latest_night)
+    latest = client.get(f"/api/browse/{DEP}/night").json()
+    assert latest["date"] == latest["latest_date"] == NIGHT and latest["is_latest"]
+    after = client.get(f"/api/browse/{DEP}/night", params={"date": "2025-04-12"}).json()
+    assert after["prev_date"] == NIGHT and after["nights_with_data"] == 0 and not after["is_latest"]
+    month = client.get(f"/api/browse/{DEP}/night", params={"date": "2025-04-01", "nights": 31}).json()
+    assert month["last_date"] == "2025-05-01" and month["nights_with_data"] == 1
+    assert month["end_unix"] - month["start_unix"] == pytest.approx(30 * 86400 + 12 * 3600)
+    assert client.get(f"/api/browse/{DEP}/night", params={"date": "2025-13-01"}).status_code == 400
+    assert client.get(f"/api/browse/{DEP}/night", params={"nights": 40}).status_code == 422
+    assert client.get("/api/browse/nowhere/night").status_code == 404

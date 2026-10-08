@@ -4,7 +4,7 @@
  * settings; nothing is computed). Changing a setting asks the server whether
  * that is still the default (same configuration hash); if not, the
  * calibration is computed with those settings in the background (~45 s) and
- * labelled as such. The selection is shared with the Detailed Data View.
+ * labelled as such. The selection is shared with the Calibrated night tab.
  */
 import { useState } from "react"
 import { useCalibration } from "../state/CalibrationContext"

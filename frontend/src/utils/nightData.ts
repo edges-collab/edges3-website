@@ -111,3 +111,10 @@ export function minusChannelMedian(rows: number[][]): number[][] {
   }
   return rows.map((r) => r.map((v, j) => v - med[j]))
 }
+
+/** The night (its evening's site date) a time belongs to: before local noon,
+ * the night that started the evening before (as ``Products.night``). */
+export function nightOf(t: number, utcOffsetHours: number): string {
+  const local = toSiteTime(t, utcOffsetHours)
+  return Number(local.slice(11, 13)) >= 12 ? local.slice(0, 10) : shiftDate(local.slice(0, 10), -1)
+}

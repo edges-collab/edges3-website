@@ -1,10 +1,44 @@
 /**
- * The raw-data browse page (backend/browse_api.py). Times are POSIX seconds.
+ * A receiver's record and nights (backend/browse_api.py). Times are POSIX seconds.
  */
 type Num = number | null
 
-/** A receiver; ``band_mhz``: its antenna's band (null: show everything). */
-export type Deployment = { name: string; label: string; band_mhz: [number, number] | null }
+/** A receiver (a catalog deployment). */
+export type Deployment = {
+  name: string
+  label: string
+  /** "EDGES-3" or "EDGES-2" (groups the picker) */
+  instrument: string
+  /** its antenna's band (null: show everything) */
+  band_mhz: [number, number] | null
+  /** the site clock: nights run 18:00-06:00 in it */
+  utc_offset_hours: number
+  timezone: string
+  /** the pipeline's night products (L1: the night figure, file QA) */
+  night_products: boolean
+  /** receiver calibrations (the Calibration and Calibrated night views) */
+  calibration: boolean
+}
+
+/** ``nights`` nights from ``date`` (each named by its evening's site date). */
+export type NightSpan = {
+  deployment: string
+  date: string
+  last_date: string
+  nights: number
+  start_unix: number
+  end_unix: number
+  utc_offset_hours: number
+  timezone: string
+  /** the latest night with data (with night products: with quick-look products) */
+  latest_date: string | null
+  is_latest: boolean
+  /** the nearest nights with antenna data before ``date`` and after ``last_date`` */
+  prev_date: string | null
+  next_date: string | null
+  first_date: string | null
+  nights_with_data: number
+}
 
 export type Overview = {
   deployment: string

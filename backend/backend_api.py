@@ -123,7 +123,7 @@ async def spa_fallback(full_path: str):
     """Serve the built SPA.
 
     Real file (``/assets/index-…js``, ``/favicon.svg``, etc.) → that file.
-    Anything else (``/calibrations``, ``/data-view``, …) → ``index.html``
+    Anything else (``/edges3-mro/night``, ``/status``, …) → ``index.html``
     so React Router can take over.
 
     Paths whose last segment looks like a file (e.g. ``/foo/bar.npz``)

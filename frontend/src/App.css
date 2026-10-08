@@ -68,7 +68,7 @@ body {
   justify-content: center;
   align-items: center;
 }
-/* Option panel on the left of the Calibrations / Detailed Data View tabs;
+/* Option panel on the left of the Calibration / Calibrated night tabs;
    stays in view while the plots scroll. Stacks above the plots on narrow
    screens. */
 .side-panel {

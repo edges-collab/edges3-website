@@ -16,9 +16,11 @@ type Props = {
   diverging?: boolean
   height?: number
   xTitle?: string
+  /** the x (time) range shown, as the times' strings (default: the data's) */
+  xRange?: [string, string]
 }
 
-export default function Waterfall({ title, times, freqs, z, unit, diverging, height = 320, xTitle }: Props) {
+export default function Waterfall({ title, times, freqs, z, unit, diverging, height = 320, xTitle, xRange }: Props) {
   const r = robustRange(z, undefined, undefined, 0.02, 0.98)
   let zmin = r?.[0], zmax = r?.[1]
   if (diverging && r) {
@@ -35,7 +37,7 @@ export default function Waterfall({ title, times, freqs, z, unit, diverging, hei
   const layout: Partial<Layout> = {
     title: { text: title, font: { size: 12 }, x: 0.01, xanchor: "left" },
     height, autosize: true, margin: { l: 60, r: 10, t: 30, b: 45 },
-    xaxis: { type: "date", title: { text: xTitle ?? "" } },
+    xaxis: { type: "date", title: { text: xTitle ?? "" }, ...(xRange ? { range: xRange, autorange: false } : {}) },
     yaxis: { title: { text: "Frequency [MHz]" } },
     plot_bgcolor: "#fcfcfb", paper_bgcolor: "#fcfcfb", font: { size: 11 },
   }

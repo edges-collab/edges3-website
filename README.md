@@ -1,7 +1,8 @@
-# EDGES-3 Web Interface
+# EDGES Web Interface
 
-A web UI for the EDGES-3 instrument: a nightly overview of the data,
-receiver calibrations, and nights calibrated in detail. The React frontend and the FastAPI
+A web UI for the EDGES receivers (EDGES-3 and the EDGES-2 antennas): each
+receiver's whole record and its nights, and for EDGES-3 the receiver
+calibrations and nights calibrated in detail. The React frontend and the FastAPI
 backend are intended to be **installed and run on the SSH cluster**;
 users reach the UI from a laptop by SSH-tunnelling the dev server.
 
@@ -20,8 +21,8 @@ the `.npz` arrays of finished runs, which the backend serves from its
 `OUTPUT_ROOT` static mount (`/data/...`).
 
 There is **no daemon**, no scheduler, no systemd unit. Calibration and
-observation runs happen when you click **Run** on the Calibrations or
-Detailed Data View tab (they run as background jobs, one at a time).
+observation runs happen when you click **Run** on the Calibration or
+Calibrated night tab (they run as background jobs, one at a time).
 
 ---
 
@@ -60,11 +61,11 @@ python backend/config.py    # prints every resolved path + probe number
 ### 2b. Catalog and pipeline products
 
 The site finds data through the EDGES **catalog** and the pipeline's
-precomputed products, never by scanning the raw data tree: the **Last
-night** page (the home page, `/`) reads quick-look (QL) and L1 QA
-products, the **Calibrations** tab shows the pipeline's receiver
+precomputed products, never by scanning the raw data tree: the **Record**
+and **Night** tabs read the catalog and the quick-look (QL) and L1 QA
+products, the **Calibration** tab shows the pipeline's receiver
 calibrations (stored, or computed with its code for other settings), and
-the **Detailed Data View** takes its nights and input files from the
+the **Calibrated night** tab takes its nights and input files from the
 catalog. They use two packages that are
 **not published yet**:
 `edges-catalog` and `edges-pipeline`. They are local git repositories
@@ -203,21 +204,44 @@ slow SSH tunnel — only use it when you're iterating on UI code.
 
 ## What you do in the UI
 
-Four tabs:
+Choose a receiver at the top left (EDGES-3, or an EDGES-2 antenna: low1,
+low2, low2 with the 128k spectrometer, low3, mid, high), then one of its
+views. Addresses are `/<receiver>/<view>` (e.g. `/edges3-mro/night`,
+`/edges2-low2-mro/record`); `/` opens EDGES-3's latest night. Views a
+receiver does not have yet (calibration for EDGES-2) are greyed out.
 
-* **Nightly Overview** (home, `/`): the most recent MRO night
-  (18:00–06:00 AWST) from the precomputed quick-look and L1 products: a Q
-  (or log p0) waterfall against site time with LST on the top axis, antenna
-  dropouts and ADC/data-drop events, band-median Q and band power,
-  housekeeping, and a per-file QA table with badges. The Q waterfall's
-  0.5 MHz bins are the median of their ~80 channels by default, which hides
-  narrowband RFI; **Q mean** and **Q max** keep it (QL version 3 products),
-  and **minus each channel's median** shows changes and RFI against the
-  night's typical spectrum. **Previous/Next** and
-  the date picker choose other nights (`/?date=YYYY-MM-DD`, named by the
-  local date of the evening). The badge thresholds are provisional (see
-  `QA_THRESHOLDS` in `backend/products_api.py`).
-* **Calibrations** (`/calibrations`): the receiver calibration of a day,
+* **Record** (`/<receiver>/record`): the receiver's whole record from the
+  catalog alone, per UTC day (hours of antenna and of calibration-load
+  data, or files before spectrum extraction; GB; S11 sessions; data drops;
+  largest ADC value). Click a day to open its night, or zoom in to a month
+  or less to open those nights.
+* **Night** (`/<receiver>/night?date=YYYY-MM-DD&nights=N`): one night
+  (18:00–06:00 site time, named by the date of its evening; the latest by
+  default), or up to 31. **Previous/Next** skip to the nearest nights with
+  antenna data; the date picker and the nights selector choose others.
+  Everything is in site time (AWST).
+  * With the pipeline's night products (EDGES-3, one night): the night
+    figure from the quick-look and L1 products: a Q (or log p0) waterfall
+    with LST on the top axis, antenna dropouts and ADC/data-drop events,
+    band-median Q and band power, and housekeeping. The Q waterfall's
+    0.5 MHz bins are the median of their ~80 channels by default, which
+    hides narrowband RFI; **Q mean** and **Q max** keep it (QL version 3
+    products), and **minus each channel's median** shows changes and RFI
+    against the night's typical spectrum.
+  * Otherwise (EDGES-2, or several nights): the quick-look Q waterfall of
+    the times shown (up to 8 days; median, mean or max binning, optionally
+    minus each channel's median; EDGES-2 antennas start in their band, e.g.
+    low-band 50–100 MHz, with the full 40–200 MHz one click away).
+  * Then, from the catalog: each spectrum file's span (by load) and the
+    S11 sessions; the receiver's own housekeeping (EDGES-3: the temperature
+    log, in the night figure; EDGES-2: its sensor files) and the site's
+    weather (the figures zoom together, and the waterfall follows); a file
+    table, with the night's QA badges for EDGES-3 (click a file for its
+    per-cycle ADC extremes and data drops); and the S11 sessions (click one
+    for its raw, uncalibrated |S11| and phase). No spectrum file is read
+    here. The badge thresholds are provisional (see `QA_THRESHOLDS` in
+    `backend/products_api.py`).
+* **Calibration** (`/edges3-mro/calibration`): the receiver calibration of a day,
   from edges-pipeline. On load it shows the day's **stored pipeline
   calibration** (the pipeline's default settings, computed by its cron for
   every calibration day; nothing is computed here): the residuals of the
@@ -237,9 +261,10 @@ Four tabs:
   (`rcal.calibrate_day`, ~45 s, ~2 GB), labelled as computed. The fit band
   is also the calibration band. Another stored configuration (e.g. the old
   Alan-mode products) can be overlaid for comparison.
-* **Detailed Data View** (`/data`): choose a night, the antenna S11
+* **Calibrated night** (`/edges3-mro/calibrated`; **Calibrate this night**
+  on the Night tab): choose a night, the antenna S11
   session and its fit window on the left; the receiver calibration is the
-  one selected on the Calibrations tab (a computed one runs first if
+  one selected on the Calibration tab (a computed one runs first if
   needed). Click **Run**
   (~30 s per night); the plots load on the right: the night-mean P_ant,
   P_load, P_LNS, Q, R = P_load/(P_LNS − P_load) and uncalibrated
@@ -247,19 +272,6 @@ Four tabs:
   calibration band), the antenna calibration (a, b and calibrated
   temperature, within the antenna S11 fit window), the antenna S11 (model
   and measurement) and, on demand, Q and T_cal waterfalls.
-* **Raw Data** (`/raw`; EDGES-3, EDGES-2 low2 and low2-128k so far): a
-  receiver's whole record from the catalog alone, per UTC day (hours of
-  antenna and of calibration-load data, or files before spectrum
-  extraction; GB; S11 sessions; data drops; largest ADC value). Zoom in to
-  two months or less, or click a day, for the range: each spectrum file's
-  span (by load), the S11 sessions, the receiver's own housekeeping
-  (EDGES-3: the temperature log; EDGES-2: its sensor files) and the site's
-  weather (both panels zoom together); the pipeline's quick-look Q
-  waterfall of the times shown (up to 8 days; median, mean or max binning,
-  optionally minus each channel's median; EDGES-2 antennas start in their
-  band, e.g. low-band 50–100 MHz, with the full 40–200 MHz one click away); a file table (click a file for
-  its per-cycle ADC extremes and data drops) and the S11 sessions (click one
-  for its raw, uncalibrated |S11| and phase). No spectrum file is read here.
 * **Status** (`/status`): whether the data packages work, and what the
   job queue is doing.
 
@@ -276,17 +288,19 @@ request is never recomputed; the newest 20 of each kind are kept.
 | `backend/` | Python service |
 | `backend/config.py` | All env-driven paths and tunable defaults (single source of truth) |
 | `backend/backend_api.py` | FastAPI app — routers, status, static-file mount, SPA fallback |
-| `backend/products_api.py` | Read-only `/api/night` etc. over the catalog and pipeline products (Nightly Overview) |
+| `backend/products_api.py` | Read-only `/api/night` etc. over the catalog and pipeline products (EDGES-3's night figure and file QA) |
 | `backend/runs_api.py` | Calibration / observation runs as background jobs (`/api/calibrations`, `/api/observations`) |
-| `backend/browse_api.py` | The Raw Data page's `/api/browse/...`: a receiver's record, files, cycles, raw S11 sessions, housekeeping and weather, from the catalog |
+| `backend/browse_api.py` | `/api/browse/...` for every receiver: the receivers offered, nights, the record, files, cycles, raw S11 sessions, housekeeping, weather and quick-look waterfalls |
 | `backend/catalog_inputs.py` | Dates, nights, input files, S11 sessions and probe temperatures, from the catalog (nothing scans the raw tree) |
 | `backend/run_single_day.py` | The EDGES pipeline: `--stage calibration` and `--stage observation` |
 | `backend/tests/` | pytest tests on a small synthetic catalog |
 | `backend/requirements.txt` | Every Python dep, installed via `uv pip install` |
 | `frontend/` | React + Vite SPA |
-| `frontend/src/pages/` | `LastNight` (Nightly Overview), `Calibrations`, `DataView`, `Browse` (Raw Data), `Home` (Status) |
+| `frontend/src/pages/` | `Record`, `Night`, `Calibrations` (Calibration), `DataView` (Calibrated night), `Status` |
+| `frontend/src/components/NavBar.tsx`, `src/utils/views.ts`, `src/state/Receivers.tsx` | The receiver picker and its views |
+| `frontend/src/components/RangePanels.tsx`, `QuickLookPanel.tsx`, `NightFigure.tsx` | The Night tab's panels |
 | `frontend/src/components/StackedPlot.tsx` | Multi-panel figures sharing an x axis |
-| `frontend/src/state/CalibrationContext.tsx` | The calibration selected on the Calibrations tab (shared with the Data View) |
+| `frontend/src/state/CalibrationContext.tsx` | The calibration selected on the Calibration tab (shared with the Calibrated night tab) |
 | `frontend/src/utils/baseURL.ts` | Where the frontend reads `VITE_API_URL` from |
 | `outputs/` | **NOT** checked into git — runtime artefacts (runs) |
 
@@ -307,14 +321,14 @@ launching the backend.
 | `EDGES_BEAM_FACTOR_FILE` | `/data4/vydula/edges/packages/edges3-data-analysis/data/e3_beam_factor.hickle` (canonical; falls back to `<RAW_DATA_ROOT>/../../../e3_beam_factor.hickle` then `/mnt/data5/...`, `/scratch/...`, `$HOME/edges/...`) | Path to the EDGES-3 antenna beam factor file. Required for the absolute temperature calibration; the canonical path ships with the `edges-3-data-analysis` package. Set this explicitly only if the file lives somewhere else. |
 | `EDGES_PIPELINE_ROOT` | `/data6/edges/edges-db` | Where the catalog (`catalog.sqlite`), products database (`products.sqlite`) and QL/L1 products live (read by `/api/*`; read only) |
 | `EDGES_PYTHON` | current interpreter (`sys.executable`) | Python the backend shells out to when running the pipeline |
-| `EDGES_PROBE_AMBIENT` | `101` | Temperature-log code of the ambient load, shown per antenna file on the Detailed Data View (information only) |
+| `EDGES_PROBE_AMBIENT` | `101` | Temperature-log code of the ambient load, shown per antenna file on the Calibrated night tab (information only) |
 | `EDGES_PROBE_COLD_LOAD` | `152` | Code 152 is `pr59_current`, **not a temperature**; informational only, not used by the calibration |
 | `EDGES_ALLOWED_ORIGINS` | `http://localhost:5173, http://127.0.0.1:5173, http://localhost:8003, http://127.0.0.1:8003` | Comma-separated CORS allowlist for the API. Loopback origins are always allowed; when the SPA is hosted on a different host than the backend, set this to the SPA's origin (e.g. `https://edges.example.com`). Never set it to `*`. |
 
 The receiver calibration's inputs are the pipeline's: the full S11 session
 the catalog recommends for the day, and the mean temperature-log readings
 of probes 101 (ambient load) and 102 (hot load) during those spectra (the
-probes are settings on the Calibrations tab). The calibration of the
+probes are settings on the Calibration tab). The calibration of the
 antenna needs no probe temperature: Q is converted to an approximate
 temperature with the calibration's own Dicke convention
 (`t_load = 300 K`, `t_load_ns = 1000 K`), which the calibrator then
@@ -454,11 +468,11 @@ To confirm with the team:
 * **Ambient-load probe.** The pipeline's calibration uses code 101
   (`amb_load_temperature`); the site's own Alan-mode runs used 100
   (`front_end_temperature`). To confirm with the team; 100 can be chosen on
-  the Calibrations tab (a computed calibration).
+  the Calibration tab (a computed calibration).
 * **Antenna S11 fit window.** The default is 58–105 MHz, where the
   EDGES-3 antenna is matched (|S11| ≈ 0.16–0.27); outside it |S11| rises to
   ~0.9 and one model fits ~300× worse, so a, b and T_cal are only produced
-  in the window. It can be changed on the Detailed Data View tab.
+  in the window. It can be changed on the Calibrated night tab.
 * **Code 152** is `pr59_current`, not a cold-load temperature; the site
   keeps `EDGES_PROBE_COLD_LOAD` only for information.
 * **Code 0** is the thermal setpoint (35 °C for most of the record, 25 °C

@@ -1,12 +1,11 @@
 /**
- * Detailed Data View: choose a night, the antenna S11 session and its fit
+ * Calibrated night: choose a night, the antenna S11 session and its fit
  * window in the left panel; the receiver calibration is the one selected on
- * the Calibrations tab (the stored pipeline calibration of a day, or one
+ * the Calibration tab (the stored pipeline calibration of a day, or one
  * computed with other settings, which runs first if needed). The night's
  * plots appear on the right.
  */
-import { useSearchParams } from "react-router"
-import { Link } from "react-router"
+import { Link, useParams, useSearchParams } from "react-router"
 import { useCalibration } from "../state/CalibrationContext"
 import { useRun } from "../hooks/useRun"
 import { useJson } from "../hooks/useJson"
@@ -27,6 +26,7 @@ const PARAMS: [string, string, number?][] = [
 
 export default function DataView() {
   const { calibration } = useCalibration()
+  const { dep } = useParams()
   const [q, setQ] = useSearchParams()
   const night = q.get("night") ?? "Latest"
   const antS11 = q.get("ant_s11") ?? "Latest"
@@ -80,11 +80,11 @@ export default function DataView() {
               <div className="text-muted">
                 config <code>{cal.config_hash.slice(0, 12)}</code>
                 {cal.source === "computed" && (cal.status?.state === "done" ? " · ready" : " · not computed yet: runs first (~45 s)")}
-                {" · "}<Link to="/calibrations">change on the Calibrations tab</Link>
+                {" · "}<Link to={`/${dep}/calibration`}>change on the Calibration tab</Link>
               </div>
               {cal.unavailable && (
                 <div className="alert alert-warning py-1 px-2 mt-1 mb-0">
-                  No calibration for {cal.day}: {cal.unavailable}. Choose another day on the Calibrations tab.
+                  No calibration for {cal.day}: {cal.unavailable}. Choose another day on the Calibration tab.
                 </div>
               )}
             </>
@@ -115,7 +115,7 @@ export default function DataView() {
             {detail && (detail.status.state === "queued" || detail.status.state === "running")
               ? "Processing the night; its plots will appear here."
               : cal?.unavailable
-                ? `There is no receiver calibration for ${cal.day} (${cal.unavailable}): choose another day on the Calibrations tab.`
+                ? `There is no receiver calibration for ${cal.day} (${cal.unavailable}): choose another day on the Calibration tab.`
                 : r
                 ? "This night has not been processed with these options yet: click Run on the left."
                 : "Resolving the night's inputs in the catalog…"}

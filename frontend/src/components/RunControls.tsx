@@ -1,5 +1,5 @@
 /**
- * Shared pieces of the Calibrations and Detailed Data View option panels:
+ * Shared pieces of the Calibration and Calibrated night option panels:
  * a labelled select, a numeric parameter input that commits on blur/Enter,
  * the list of input issues, and the run status with its Run button.
  */

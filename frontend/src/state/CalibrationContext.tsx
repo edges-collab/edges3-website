@@ -1,8 +1,8 @@
 /**
- * The calibration selected on the Calibrations tab: a day, the pipeline
+ * The calibration selected on the Calibration tab: a day, the pipeline
  * settings that differ from the default and optionally another S11 session
  * (neither: the stored calibration). The
- * Detailed Data View uses it, so both tabs agree. Kept in localStorage per
+ * Calibrated night tab uses it, so both tabs agree. Kept in localStorage per
  * browser (a selection saved in an older format is dropped).
  */
 import { createContext, useContext, useState, type ReactNode } from "react"
