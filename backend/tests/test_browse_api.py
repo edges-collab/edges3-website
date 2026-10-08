@@ -33,8 +33,10 @@ def test_deployments(client):
     assert client.get("/api/browse/deployments").json() == [{
         "name": DEP, "label": "EDGES-3 (test)", "instrument": "EDGES-3", "band_mhz": None,
         "utc_offset_hours": 8.0, "timezone": "AWST", "night_products": True, "calibration": True}]
-    # every offered receiver has a site clock
-    assert set(browse_api.DEPLOYMENTS) <= set(browse_api.SITE_CLOCK)
+    # every offered receiver has a site clock in edges-pipeline
+    from edges_pipeline.products import SITE_UTC_OFFSET_HOURS
+
+    assert set(browse_api.BANDS_MHZ) <= set(SITE_UTC_OFFSET_HOURS)  # (DEPLOYMENTS is patched here)
     # every offered EDGES-2 antenna has a band
     assert all(browse_api.BANDS_MHZ.get(d) for d in browse_api.DEPLOYMENTS if d.startswith("edges2"))
     assert client.get("/api/browse/edges2-low2-mro/overview").status_code == 404  # not offered

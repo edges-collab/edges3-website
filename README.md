@@ -80,9 +80,13 @@ uv pip install \
 
 The `cal` extra pins the `edges-analysis` version the pipeline's receiver
 calibration is written for (computing a calibration with other settings
-fails without it).
+fails without it). The site needs edges-pipeline 1b258d2 or later: its
+site clocks (`SITE_UTC_OFFSET_HOURS`) cover the EDGES-2 deployments, and
+every receiver's nights come from `Products.night`. To upgrade, reinstall
+at the new commit, e.g.
+`uv pip install --reinstall-package edges-pipeline "edges-pipeline[cal] @ git+file:///path/to/edges-pipeline@<commit>"`.
 
-Without them the Last night page, the date lists and the calibration
+Without them the Record and Night tabs, the date lists and the calibration
 flow return 503 with an install hint. The products and the catalog live under
 `EDGES_PIPELINE_ROOT` (default `/data6/edges/edges-db`); run the backend
 as a member of the `loco` group, since the SQLite (WAL) databases need

@@ -34,7 +34,7 @@ GET /{deployment}/s11?session_id=|stamp=  one S11 session's files, as
 
 Times are POSIX seconds (UTC); ``start``/``end`` also take ISO strings. A
 night is named by the site's local date of its evening and runs 18:00-06:00
-site time (as ``Products.night``).
+site time (``Products.night``, in edges-pipeline's site clocks).
 Only the deployments in :data:`DEPLOYMENTS` can be asked for.
 """
 
@@ -43,7 +43,7 @@ from __future__ import annotations
 import bisect
 import math
 from collections import defaultdict
-from datetime import UTC, date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
 
 import numpy as np
@@ -87,12 +87,9 @@ HK_SOURCE: dict[str, str] = {
     "edges3-mro": "templog",
     **{k: "sensors" for k in DEPLOYMENTS if k.startswith("edges2")},
 }
-#: Each receiver's site clock: UTC offset (hours) and its name. All are at
-#: the MRO so far (AWST, no daylight saving).
-SITE_CLOCK: dict[str, tuple[float, str]] = {k: (8.0, "AWST") for k in DEPLOYMENTS}
-#: A night: 18:00 site time for 12 hours (the defaults of ``Products.night``).
-NIGHT_START_HOUR = 18
-NIGHT_HOURS = 12
+#: Names of the site clocks (UTC offset in hours -> name), for labels only;
+#: the offsets themselves are edges-pipeline's (``SITE_UTC_OFFSET_HOURS``).
+CLOCK_NAMES: dict[float, str] = {8.0: "AWST"}
 #: The most nights the night page shows at once.
 MAX_NIGHTS = 31
 #: Housekeeping points sent per quantity for a range at most.
@@ -116,21 +113,23 @@ def _deployment(name: str) -> str:
 
 
 def _clock(deployment: str) -> tuple[float, str]:
-    return SITE_CLOCK.get(deployment, (0.0, "UTC"))
+    """A receiver's site clock (edges-pipeline's): UTC offset (hours) and name."""
+    off = products_api.SITE_UTC_OFFSET_HOURS.get(deployment)
+    if off is None:  # without edges-pipeline (the pages then say it is missing)
+        return 0.0, "UTC"
+    return off, CLOCK_NAMES.get(off, f"UTC{off:+g}")
 
 
 def night_bounds(deployment: str, day: date) -> tuple[float, float]:
     """The UTC bounds (POSIX s) of the night starting on the evening of ``day``."""
-    tz = timezone(timedelta(hours=_clock(deployment)[0]))
-    start = datetime.combine(day, time(0), tzinfo=tz) + timedelta(hours=NIGHT_START_HOUR)
-    return start.timestamp(), (start + timedelta(hours=NIGHT_HOURS)).timestamp()
+    return products_api.Products.night(day, deployment=deployment)
 
 
 def night_of(deployment: str, t: float) -> date:
-    """The night (its evening's date) a time belongs to: before local noon,
-    the night that started the evening before."""
-    local = datetime.fromtimestamp(t, timezone(timedelta(hours=_clock(deployment)[0])))
-    return local.date() if local.hour >= 12 else local.date() - timedelta(days=1)
+    """The night (its evening's date) a time belongs to (``Products.night``:
+    before local noon, the night that started the evening before)."""
+    start, _ = products_api.Products.night(float(t), deployment=deployment)
+    return datetime.fromtimestamp(start, timezone(timedelta(hours=_clock(deployment)[0]))).date()
 
 
 def _range(start: str | None, end: str | None) -> tuple[float, float]:
