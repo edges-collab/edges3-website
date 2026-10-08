@@ -14,7 +14,7 @@ The night of 2025-04-10 at the MRO (18:00-06:00 AWST = 10:00-22:00 UTC) has:
 - ``bad`` 14:00 UTC, catalogued, then its first entry garbled in place
   (read_acq cannot decode it: no products);
 - ``day`` 2025-04-11 05:00 UTC (13:00 AWST), 5 cycles: daytime data after
-  the night, so ``Products.latest_night`` points at the (empty) next night;
+  the night, in no night window (``Products.latest_night`` is still 2025-04-10);
 - a temperature log every 5 min over 10:00-11:00 and 12:30-13:30 UTC.
 
 A calibration day, 2025-04-12 (``2025_102``):
