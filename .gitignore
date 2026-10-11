@@ -76,3 +76,6 @@ Desktop.ini
 .eslintcache
 .parcel-cache
 .cache/
+
+# Claude Code session files and worktrees
+.claude/
