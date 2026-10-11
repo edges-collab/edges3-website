@@ -86,8 +86,27 @@ export type BrowseFile = {
   adcmin: Num
 }
 
-/** A catalog S11 session (``session_id``), or files sharing a stamp (null id). */
-export type S11Session = { session_id: number | null; stamp_unix: number; kind: string; labels: string[]; name: string }
+/** A catalog S11 session (``session_id``), or files sharing a stamp (null id);
+ * ``raw_session_id``: its unaveraged repeats (EDGES-3 since 2026-08), if recorded. */
+export type S11Session = {
+  session_id: number | null; stamp_unix: number; kind: string; labels: string[]; name: string
+  raw_session_id: number | null; n_raw_files: number
+}
+
+/** One load's unaveraged S11 repeats in a raw session, in the order taken. */
+export type RawS11 = {
+  deployment: string
+  raw_session_id: number
+  stamp_unix: number
+  label: string
+  labels: string[]
+  freq_mhz: Num[]
+  /** ``time_unix``: the file's time (the VNA's clock is not set) */
+  repeats: { index: number; name: string; time_unix: number | null }[]
+  re: Num[][]
+  im: Num[][]
+  errors: string[]
+}
 
 export type Housekeeping = {
   available: boolean

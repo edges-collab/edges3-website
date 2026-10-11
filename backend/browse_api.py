@@ -6,10 +6,10 @@ The raw data of a receiver (EDGES-3, the EDGES-2 antennas), from the EDGES
 catalog only: what was recorded when (antenna and calibration-load
 spectra), the per-file and per-cycle quality numbers that spectrum
 extraction adds (``v_spectra``, ``Catalog.acq_cycles``), the S11 sessions,
-the receiver's own housekeeping and the site's weather. Nothing here needs
-pipeline products (EDGES-2 has none yet), and nothing reads a spectrum file:
-the only raw files read are S11 ``.s1p`` files (~10 kB), one session at a
-time.
+the receiver's own housekeeping and the site's weather, and the pipeline's
+quick-look waterfalls. Nothing reads a spectrum file: the only raw files
+read are S11 ``.s1p`` files (~10 kB), one session (or one load's raw
+repeats, up to 50) at a time.
 
 Endpoints (prefix ``/api/browse``)
 ----------------------------------
@@ -31,6 +31,9 @@ GET /{deployment}/cycles/{file_id}     one spectrum file's cycles: ADC extremes
                                        and data drops per switch position
 GET /{deployment}/s11?session_id=|stamp=  one S11 session's files, as
                                        measured (raw, uncalibrated)
+GET /{deployment}/s11/raw?raw_session_id=&label=  one load's unaveraged
+                                       repeats in a raw S11 session (EDGES-3
+                                       since 2026-08), with their times
 
 Times are POSIX seconds (UTC); ``start``/``end`` also take ISO strings. A
 night is named by the site's local date of its evening and runs 18:00-06:00
@@ -42,6 +45,7 @@ from __future__ import annotations
 
 import bisect
 import math
+import re
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
@@ -104,6 +108,8 @@ MAX_WEATHER_POINTS = 6000
 #: The labels of a raw EDGES-2 S11 session (``s11/daily``): the antenna and
 #: the VNA's four calibration inputs.
 S11_SESSION_LABEL = "antenna_s11"
+#: A raw (unaveraged) S11 repeat's number in its file name (``ant_07.s1p``).
+RAW_REPEAT = re.compile(r"_(\d+)\.s1p$")
 
 
 def _deployment(name: str) -> str:
@@ -197,20 +203,26 @@ def _file_sessions(s11) -> list[dict[str, Any]]:
         labels = sorted(str(v) for v in g.label)
         if S11_SESSION_LABEL in labels:
             out.append({"session_id": None, "stamp_unix": float(stamp), "kind": "antenna",
-                        "labels": labels, "name": _stamp_name(float(stamp))})
+                        "labels": labels, "name": _stamp_name(float(stamp)), "raw_session_id": None,
+                        "n_raw_files": 0})
     return out
 
 
 def _sessions(cat: Any, deployment: str, t0: float | None = None, t1: float | None = None):
-    """The deployment's S11 sessions: the catalog's (averaged ones), or, while
-    it has none for this deployment, its daily S11 files grouped by stamp."""
+    """The deployment's S11 sessions: the catalog's (averaged ones, with the
+    raw session of their unaveraged repeats where there is one: EDGES-3 since
+    2026-08), or, while it has none for this deployment, its daily S11 files
+    grouped by stamp."""
     where, params = ["d.name = ?", "s.source = 'averaged'"], [deployment]
     if t0 is not None:
         where.append("s.stamp_unix >= ? AND s.stamp_unix < ?")
         params += [t0, t1]
     df = cat.sql(
-        "SELECT s.id, s.stamp_unix, s.kind, s.labels FROM s11_session s"
-        f" JOIN deployment d ON d.id = s.deployment_id WHERE {' AND '.join(where)} ORDER BY s.stamp_unix",
+        "SELECT s.id, s.stamp_unix, s.kind, s.labels, r.id AS raw_id, r.n_files AS raw_n FROM s11_session s"
+        " JOIN deployment d ON d.id = s.deployment_id"
+        " LEFT JOIN s11_session r ON r.deployment_id = s.deployment_id AND r.source = 'raw'"
+        " AND r.stamp_unix = s.stamp_unix"
+        f" WHERE {' AND '.join(where)} ORDER BY s.stamp_unix",
         tuple(params),
     )
     if df.empty:
@@ -220,7 +232,9 @@ def _sessions(cat: Any, deployment: str, t0: float | None = None, t1: float | No
         if any_session.empty:
             return _file_sessions(_s11_files(cat, deployment, t0, t1))
     return [{"session_id": int(r.id), "stamp_unix": float(r.stamp_unix), "kind": str(r.kind),
-             "labels": str(r.labels or "").split(","), "name": _stamp_name(float(r.stamp_unix))}
+             "labels": str(r.labels or "").split(","), "name": _stamp_name(float(r.stamp_unix)),
+             "raw_session_id": int(r.raw_id) if _finite(r.raw_id) else None,
+             "n_raw_files": int(r.raw_n) if _finite(r.raw_n) else 0}
             for r in df.itertuples()]
 
 
@@ -417,14 +431,20 @@ def overview(deployment: str) -> dict[str, Any]:
 
 
 @router.get("/{deployment}/range")
-def file_range(deployment: str, start: str, end: str) -> dict[str, Any]:
-    """The spectrum files and S11 sessions of a range."""
+def file_range(
+    deployment: str, start: str, end: str,
+    s11_pad_hours: float = Query(0.0, ge=0, le=24, description="Also the S11 sessions this long before and after"),
+) -> dict[str, Any]:
+    """The spectrum files and S11 sessions of a range (S11 sessions also
+    ``s11_pad_hours`` either side: EDGES-3 measures its S11 in the morning,
+    after the night)."""
     dep = _deployment(deployment)
     t0, t1 = _range(start, end)
+    pad = s11_pad_hours * 3600
     prod = products_api.get_products()
     with _db_errors(), products_api._open_catalog(prod) as cat:
         acq = _acq_files(cat, dep, t0, t1)
-        s11 = _sessions(cat, dep, t0, t1)
+        s11 = _sessions(cat, dep, t0 - pad, t1 + pad)
     files = [
         {
             "file_id": int(r.file_id),
@@ -559,6 +579,72 @@ def s11_session(deployment: str, session_id: int | None = None, stamp: float | N
                 "im": _float_list(np.imag(g), 7),
             }
     return {"deployment": dep, "stamp_unix": float(stamp), "traces": traces}
+
+
+@router.get("/{deployment}/s11/raw")
+def s11_raw(deployment: str, raw_session_id: int, label: str = "ant") -> dict[str, Any]:
+    """One load's unaveraged S11 repeats in a raw session, as measured
+    (uncalibrated), in the order taken: each repeat's reflection coefficient
+    and its file's time (the VNA's own clock is not set, so the file's
+    modification time, preserved from the field)."""
+    dep = _deployment(deployment)
+    prod = products_api.get_products()
+    key = ("browse-s11raw", dep, int(raw_session_id), label, products_api._data_version(prod))
+    hit = products_api._cache.get(key)
+    if hit is not None:
+        return hit
+    with _db_errors(), products_api._open_catalog(prod) as cat:
+        own = cat.sql(
+            "SELECT s.stamp_unix, s.labels FROM s11_session s JOIN deployment d ON d.id = s.deployment_id"
+            " WHERE s.id = ? AND d.name = ? AND s.source = 'raw'", (int(raw_session_id), dep))
+        if own.empty:
+            raise HTTPException(status_code=404, detail="no such raw S11 session in this deployment")
+        files = cat.sql(
+            "SELECT f.relpath, f.path, f.mtime_ns FROM s11_session_file sf JOIN v_file f ON f.id = sf.file_id"
+            " WHERE sf.session_id = ? AND sf.label = ?", (int(raw_session_id), label))
+    labels = str(own.labels.iloc[0] or "").split(",")
+    if files.empty:
+        raise HTTPException(status_code=404, detail=f"no {label!r} repeats in this session (it has {', '.join(labels)})")
+    from edges.cal import ReflectionCoefficient
+
+    def index(relpath: str) -> int:
+        m = RAW_REPEAT.search(relpath)
+        return int(m.group(1)) if m else -1
+
+    files = files.assign(index=[index(p) for p in files.relpath]).sort_values(["index", "relpath"])
+    freq, repeats, reals, imags, errors = None, [], [], [], []
+    with _heavy_slot():
+        for r in files.itertuples():
+            name = r.relpath.rsplit("/", 1)[-1]
+            try:
+                rc = ReflectionCoefficient.from_s1p(r.path)
+                f = np.asarray(rc.freqs.to_value("MHz"), dtype=float)
+                if freq is None:
+                    freq = f
+                elif f.shape != freq.shape or not np.allclose(f, freq):
+                    raise ValueError("its frequencies differ from the first repeat's")
+            except Exception as e:  # a malformed repeat: say so, keep the others
+                errors.append(f"{name}: {type(e).__name__}: {e}")
+                continue
+            g = np.asarray(rc.reflection_coefficient)
+            repeats.append({"index": int(r.index), "name": name,
+                            "time_unix": round(float(r.mtime_ns) / 1e9, 1) if _finite(r.mtime_ns) else None})
+            reals.append(_float_list(np.real(g), 7))
+            imags.append(_float_list(np.imag(g), 7))
+    out = {
+        "deployment": dep,
+        "raw_session_id": int(raw_session_id),
+        "stamp_unix": float(own.stamp_unix.iloc[0]),
+        "label": label,
+        "labels": labels,
+        "freq_mhz": _float_list(freq, 4) if freq is not None else [],
+        "repeats": repeats,
+        "re": reals,
+        "im": imags,
+        "errors": errors,
+    }
+    products_api._cache.put(key, out)
+    return out
 
 
 @router.get("/{deployment}/housekeeping")

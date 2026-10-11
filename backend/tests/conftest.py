@@ -21,7 +21,9 @@ A calibration day, 2025-04-12 (``2025_102``):
 
 - ``amb``/``hot``/``open``/``short`` spectra starting 03:00/04:00/05:00/06:00 UTC;
 - full averaged S11 sessions ``2025_102_02`` (the one to use) and
-  ``2025_101_05`` (the day before);
+  ``2025_101_05`` (the day before); ``2025_102_02`` also with its raw
+  session: :data:`RAW_REPEATS` unaveraged repeats per load, 2 min apart, the
+  antenna's last one a glitch;
 - an ambient-load ``.tmp`` snapshot for 03:00 (probe 100 = 27 C);
 - a temperature log every 5 min over 03:30-06:30 UTC (hot load 111 C, probe
   100 = 25 C), so the ambient spectrum has only its snapshot.
@@ -65,6 +67,8 @@ S11_LABELS = (
     "amb", "hot", "open", "short", "L", "O", "S", "lna", "lna_L", "lna_O", "lna_S", "ant",
 )
 CYCLE_S = 23
+#: Unaveraged S11 repeats per load in the S11_GOOD session (its raw session).
+RAW_REPEATS = 3
 #: Settings of the second stored rcal configuration.
 ALT_PARAMS = {"fit": {"cterms": 9}}
 #: A narrowband RFI line in file C (119.92 MHz): its QL bin has 3 channels,
@@ -256,6 +260,17 @@ def build_env(tmp: Path):
         for label in S11_LABELS:
             (root / f"{stem}_{label}.s1p").write_text(s1p)
             _age(root / f"{stem}_{label}.s1p")
+    # the session's unaveraged repeats (EDGES-3 records them since 2026-08),
+    # 2 min apart: RAW_REPEATS per load, the antenna's last one a glitch
+    raw = root / "raw_s1p_files" / S11_GOOD
+    raw.mkdir(parents=True)
+    t_raw = (CAL_DAY + timedelta(hours=2, minutes=30)).timestamp()
+    for label in S11_LABELS:
+        for i in range(RAW_REPEATS):
+            db, deg = (-3.0, 50.0) if label == "ant" and i == RAW_REPEATS - 1 else (-1.0, 10.0)
+            path = raw / f"{label}_{i:02d}.s1p"
+            path.write_text("BEGIN\nDB\n" + "\n".join(f"{f:.6f} {db} {deg}" for f in freqs) + "\nEND\n")
+            os.utime(path, (t_raw + 120 * i, t_raw + 120 * i))
     (root / f"{CAL_DATE}_03_amb.tmp").write_text("100 +2.7e+01\n102 +1.11e+02\n")
     _age(root / f"{CAL_DATE}_03_amb.tmp")
 

@@ -242,7 +242,15 @@ receiver does not have yet (calibration for EDGES-2) are greyed out.
     weather (the figures zoom together, and the waterfall follows); a file
     table, with the night's QA badges for EDGES-3 (click a file for its
     per-cycle ADC extremes and data drops); and the S11 sessions (click one
-    for its raw, uncalibrated |S11| and phase). No spectrum file is read
+    for its raw, uncalibrated |S11| and phase). S11 sessions up to 12 h
+    either side of the window are listed too (EDGES-3 measures its S11 in
+    the morning, after the night), and `&s11=<session>` in the address opens
+    one. For sessions with their **unaveraged repeats** (EDGES-3 since
+    2026-08: 50 per load over ~2 h, 25 in full sessions), choose a load to
+    see every repeat's |S11|, phase and |Γ − median|, coloured by the order
+    taken, and per repeat against time its difference from the session's
+    median (drifts) and from its two neighbours (glitches; repeats over 5×
+    the session's typical step are marked in red). No spectrum file is read
     here. The badge thresholds are provisional (see `QA_THRESHOLDS` in
     `backend/products_api.py`).
 * **Calibration** (`/edges3-mro/calibration`): the receiver calibration of a day,

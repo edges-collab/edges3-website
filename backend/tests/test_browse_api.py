@@ -10,7 +10,7 @@ import pytest
 
 import browse_api
 import products_api
-from conftest import CYCLE_S, NIGHT, T_A, T_B, T_BAD, T_C, T_DAY
+from conftest import CYCLE_S, NIGHT, RAW_REPEATS, S11_LABELS, T_A, T_B, T_BAD, T_C, T_DAY
 
 DEP = "edges3-mro"
 
@@ -146,3 +146,30 @@ def test_night(client):
     assert client.get(f"/api/browse/{DEP}/night", params={"date": "2025-13-01"}).status_code == 400
     assert client.get(f"/api/browse/{DEP}/night", params={"nights": 40}).status_code == 422
     assert client.get("/api/browse/nowhere/night").status_code == 404
+
+
+def test_raw_s11_repeats(client):
+    r = client.get(f"/api/browse/{DEP}/range", params={"start": "2025-04-11", "end": "2025-04-13"}).json()
+    sessions = {x["name"]: x for x in r["s11_sessions"]}
+    good, old = sessions["2025_102_02"], sessions["2025_101_05"]
+    assert old["raw_session_id"] is None and old["n_raw_files"] == 0
+    assert good["raw_session_id"] and good["n_raw_files"] == RAW_REPEATS * len(S11_LABELS)
+    url = f"/api/browse/{DEP}/s11/raw"
+    raw = client.get(url, params={"raw_session_id": good["raw_session_id"]}).json()  # the antenna by default
+    assert raw["label"] == "ant" and set(raw["labels"]) == set(S11_LABELS) and not raw["errors"]
+    assert [x["index"] for x in raw["repeats"]] == list(range(RAW_REPEATS))
+    t = [x["time_unix"] for x in raw["repeats"]]
+    assert t[1] - t[0] == pytest.approx(120) and t[2] - t[1] == pytest.approx(120)  # the files' times
+    assert len(raw["re"]) == RAW_REPEATS and len(raw["re"][0]) == len(raw["freq_mhz"]) == 151
+    mag = [abs(complex(a[0], b[0])) for a, b in zip(raw["re"], raw["im"], strict=True)]
+    assert mag[0] == pytest.approx(10 ** (-1 / 20)) and mag[-1] == pytest.approx(10 ** (-3 / 20))  # the glitch
+    assert client.get(url, params={"raw_session_id": good["raw_session_id"], "label": "nope"}).status_code == 404
+    assert client.get(url, params={"raw_session_id": good["session_id"]}).status_code == 404  # an averaged one
+
+
+def test_s11_around_a_night(client):
+    # EDGES-3 measures its S11 in the morning: the night's own window has none
+    night = {"start": f"{NIGHT}T10:00:00", "end": f"{NIGHT}T22:00:00"}
+    assert client.get(f"/api/browse/{DEP}/range", params=night).json()["s11_sessions"] == []
+    padded = client.get(f"/api/browse/{DEP}/range", params={**night, "s11_pad_hours": 12}).json()
+    assert [x["name"] for x in padded["s11_sessions"]] == ["2025_101_05"]  # 7 h after the night

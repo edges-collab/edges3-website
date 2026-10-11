@@ -14,10 +14,12 @@
  * waterfall follows.
  */
 import { useMemo, useState } from "react"
+import { useSearchParams } from "react-router"
 import type { Data } from "plotly.js"
 import TimeStrips, { clock, type Strip } from "./TimeStrips"
 import StackedPlot, { MUTED, SERIES, type Panel } from "./StackedPlot"
 import QuickLookPanel from "./QuickLookPanel"
+import RawS11View from "./RawS11"
 import { useJson } from "../hooks/useJson"
 import { magPhase } from "../utils/robust"
 import type { Badge, FileQA, NightPayload } from "../types/night"
@@ -26,6 +28,8 @@ import type {
 } from "../types/browse"
 
 const CRITICAL = "#d03b3b"
+/** S11 sessions this long before and after the window are listed too. */
+const S11_PAD_HOURS = 12
 /** Housekeeping not plotted (not temperatures or voltages one reads by eye). */
 const HK_SKIP = new Set(["pr59_current", "setpoint", "thermal_control"])
 /** "front_end_temperature" -> "front end"; "sensors_frontend_low3_temperature" -> "frontend low3"
@@ -52,12 +56,21 @@ export default function RangePanels({ receiver: r, start, end, figure = false, n
   const at = useMemo(() => clock(off), [off])
   const timeTitle = `Site time (${r.timezone}, UTC${off >= 0 ? "+" : ""}${off})`
   const qs = `start=${start}&end=${end}`
-  const { data: rng, error } = useJson<RangeData>(`/api/browse/${dep}/range?${qs}`)
+  // the S11 sessions around the window too (EDGES-3 measures in the morning, after the night)
+  const { data: rng, error } = useJson<RangeData>(`/api/browse/${dep}/range?${qs}&s11_pad_hours=${S11_PAD_HOURS}`)
   const { data: w } = useJson<Weather>(`/api/browse/${dep}/weather?${qs}`)
   const showHk = !figure // the night figure has the receiver's housekeeping
   const { data: hk } = useJson<Housekeeping>(showHk ? `/api/browse/${dep}/housekeeping?${qs}` : null)
   const [fileId, setFileId] = useState<number | null>(null)
-  const [session, setSession] = useState<S11Session | null>(null)
+  // the S11 session shown is in the address (``s11=<name>``), so it can be linked to
+  const [q, setQ] = useSearchParams()
+  const session = rng?.s11_sessions.find((x) => x.name === q.get("s11")) ?? null
+  const setSession = (x: S11Session | null) => {
+    const n = new URLSearchParams(q)
+    if (x) n.set("s11", x.name)
+    else n.delete("s11")
+    setQ(n, { replace: true })
+  }
   const pick = (stamp: number) => setSession(rng?.s11_sessions.find((x) => x.stamp_unix === stamp) ?? null)
   // the figures show the same times; zooming one zooms all
   const [view, setView] = useState<[number, number] | null>(null)
@@ -144,7 +157,9 @@ export default function RangePanels({ receiver: r, start, end, figure = false, n
       <section className="border rounded p-2">
         <div className="d-flex flex-wrap align-items-center gap-2 mb-1">
           <h3 className="h6 m-0">Spectrum files and S11 sessions</h3>
-          {rng && <span className="small text-muted">{rng.files.length} spectrum files, {rng.s11_sessions.length} S11 sessions.
+          {rng && <span className="small text-muted">{rng.files.length} spectrum files,{" "}
+            {rng.s11_sessions.filter((x) => x.stamp_unix >= start && x.stamp_unix < end).length} S11 sessions
+            ({rng.s11_sessions.length} with the {S11_PAD_HOURS} h either side).
             Click a file for its cycles, an S11 session for its traces.</span>}
         </div>
         {error && <div className="alert alert-warning small py-1">{error}</div>}
@@ -252,15 +267,28 @@ export default function RangePanels({ receiver: r, start, end, figure = false, n
         <section className="border rounded p-2">
           <h3 className="h6">S11 sessions</h3>
           <div className="d-flex flex-wrap gap-1 mb-2">
-            {rng.s11_sessions.map((x) => (
-              <button key={x.stamp_unix} className={`btn btn-sm ${x.stamp_unix === session?.stamp_unix ? "btn-primary" : "btn-outline-secondary"}`}
-                title={`${x.kind}: ${x.labels.join(", ")}`} onClick={() => setSession(x)}>
-                {x.name}{x.kind !== "antenna" ? ` (${x.kind})` : ""}
-              </button>
-            ))}
+            {rng.s11_sessions.map((x) => {
+              const where = x.stamp_unix < start ? "before" : x.stamp_unix >= end ? "after" : ""
+              return (
+                <button key={x.stamp_unix} className={`btn btn-sm ${x.stamp_unix === session?.stamp_unix ? "btn-primary" : "btn-outline-secondary"}`}
+                  title={`${x.kind}: ${x.labels.join(", ")}${x.raw_session_id !== null ? `; ${x.n_raw_files} unaveraged repeats` : ""}`}
+                  onClick={() => setSession(x)}>
+                  {x.name}{x.kind !== "antenna" ? ` (${x.kind})` : ""}{where && <span className="opacity-75"> · {where}</span>}
+                  {x.raw_session_id !== null && <span className="badge text-bg-light ms-1">repeats</span>}
+                </button>
+              )
+            })}
           </div>
-          {session !== null ? <S11View dep={dep} session={session} off={off} tz={r.timezone} />
-            : <div className="small text-muted">Choose a session (or click one in the figure above).</div>}
+          {session !== null ? (
+            <>
+              <S11View dep={dep} session={session} off={off} tz={r.timezone} />
+              <RawS11View key={session.stamp_unix} dep={dep} session={session} off={off} tz={r.timezone} />
+            </>
+          ) : <div className="small text-muted">
+              Choose a session (or click one in the figure above). Sessions up to {S11_PAD_HOURS} h before and after
+              are listed too{rng.s11_sessions.some((x) => x.raw_session_id !== null)
+                ? "; those marked “repeats” also have their unaveraged repeats, to look for glitches" : ""}.
+            </div>}
         </section>
       )}
     </>
