@@ -192,7 +192,7 @@ export default function RangePanels({ receiver: r, start, end, figure = false, n
           <h3 className="h6">Spectrum files</h3>
           <div style={{ maxHeight: 420, overflow: "auto" }}>
             <table className="table table-sm table-hover align-middle small mb-0">
-              <thead className="sticky-top bg-white">
+              <thead className="sticky-top bg-body">
                 <tr>
                   <th>File</th><th>Load</th><th>Site time</th><th className="text-end">Hours</th>
                   <th className="text-end" title={night ? "Cycles in the night / in the file" : "Cycles in the file"}>Cycles</th>
@@ -274,7 +274,7 @@ export default function RangePanels({ receiver: r, start, end, figure = false, n
                   title={`${x.kind}: ${x.labels.join(", ")}${x.raw_session_id !== null ? `; ${x.n_raw_files} unaveraged repeats` : ""}`}
                   onClick={() => setSession(x)}>
                   {x.name}{x.kind !== "antenna" ? ` (${x.kind})` : ""}{where && <span className="opacity-75"> · {where}</span>}
-                  {x.raw_session_id !== null && <span className="badge text-bg-light ms-1">repeats</span>}
+                  {x.raw_session_id !== null && <span className="badge text-bg-secondary ms-1">repeats</span>}
                 </button>
               )
             })}

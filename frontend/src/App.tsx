@@ -11,6 +11,7 @@ import NavBar from "./components/NavBar.tsx"
 import UpdateBanner from "./components/UpdateBanner.tsx"
 import { CalibrationProvider } from "./state/CalibrationContext.tsx"
 import { ReceiversProvider, useReceivers } from "./state/Receivers.tsx"
+import { ThemeProvider } from "./state/Theme.tsx"
 import { DEFAULT_RECEIVER, defaultView, hasView, missingReason, type ViewKey } from "./utils/views.ts"
 
 /** A receiver's pages (``/:dep/...``), once the receivers are known. */
@@ -46,28 +47,30 @@ function Needs({ view, children }: { view: ViewKey; children: React.ReactNode })
 
 function App() {
   return (
-    <ReceiversProvider>
-      <CalibrationProvider>
-        <main className="app">
-          <NavBar />
-          <UpdateBanner />
-          <div className="page">
-            <Routes>
-              <Route path="/" element={<Navigate to={`/${DEFAULT_RECEIVER}/night`} replace />} />
-              <Route path="/status" element={<Status />} />
-              <Route path="/:dep" element={<ReceiverRoute />}>
-                <Route index element={<DefaultView />} />
-                <Route path="record" element={<Record />} />
-                <Route path="night" element={<Night />} />
-                <Route path="calibration" element={<Needs view="calibration"><Calibrations /></Needs>} />
-                <Route path="calibrated" element={<Needs view="calibrated"><DataView /></Needs>} />
-                <Route path="*" element={<DefaultView />} />
-              </Route>
-            </Routes>
-          </div>
-        </main>
-      </CalibrationProvider>
-    </ReceiversProvider>
+    <ThemeProvider>
+      <ReceiversProvider>
+        <CalibrationProvider>
+          <main className="app">
+            <NavBar />
+            <UpdateBanner />
+            <div className="page">
+              <Routes>
+                <Route path="/" element={<Navigate to={`/${DEFAULT_RECEIVER}/night`} replace />} />
+                <Route path="/status" element={<Status />} />
+                <Route path="/:dep" element={<ReceiverRoute />}>
+                  <Route index element={<DefaultView />} />
+                  <Route path="record" element={<Record />} />
+                  <Route path="night" element={<Night />} />
+                  <Route path="calibration" element={<Needs view="calibration"><Calibrations /></Needs>} />
+                  <Route path="calibrated" element={<Needs view="calibrated"><DataView /></Needs>} />
+                  <Route path="*" element={<DefaultView />} />
+                </Route>
+              </Routes>
+            </div>
+          </main>
+        </CalibrationProvider>
+      </ReceiversProvider>
+    </ThemeProvider>
   )
 }
 

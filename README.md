@@ -248,10 +248,12 @@ receiver does not have yet (calibration for EDGES-2) are greyed out.
     one. For sessions with their **unaveraged repeats** (EDGES-3 since
     2026-08: 50 per load over ~2 h, 25 in full sessions), choose a load to
     see every repeat's |S11|, phase and |Γ − median|, coloured by the order
-    taken, and per repeat against time its difference from the session's
-    median (drifts) and from its two neighbours (glitches; repeats over 5×
-    the session's typical step are marked in red). No spectrum file is read
-    here. The badge thresholds are provisional (see `QA_THRESHOLDS` in
+    taken. The repeats are sorted into states (more than 0.05 RMS |ΔΓ|
+    apart: the antenna has been seen flipping to near total reflection within
+    a session, which the averaged file then mixes); repeats outside the main
+    state are red. Within a state, a repeat stepping away from its neighbours
+    by over 5× the typical step is a glitch (orange). No spectrum file is
+    read here. The badge thresholds are provisional (see `QA_THRESHOLDS` in
     `backend/products_api.py`).
 * **Calibration** (`/edges3-mro/calibration`): the receiver calibration of a day,
   from edges-pipeline. On load it shows the day's **stored pipeline
@@ -286,6 +288,11 @@ receiver does not have yet (calibration for EDGES-2) are greyed out.
   and measurement) and, on demand, Q and T_cal waterfalls.
 * **Status** (`/status`): whether the data packages work, and what the
   job queue is doing.
+
+**Light or dark:** the switch at the top right chooses Auto (the system's
+setting, the default), Light or Dark; the choice is kept in the browser. The
+figures follow it (`frontend/src/utils/plotComponent.tsx` swaps the light
+palette for a dark one).
 
 Every finished run has a **Download (zip)** link. Runs are kept by their
 key (inputs, parameters, file versions, pipeline code), so an identical

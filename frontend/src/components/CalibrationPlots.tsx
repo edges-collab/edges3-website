@@ -178,7 +178,7 @@ export default function CalibrationPlots({ data, compare }: Props) {
         {" "}
         <details className="d-inline">
           <summary className="d-inline text-primary" style={{ cursor: "pointer" }}>Settings</summary>
-          <pre className="small bg-light border rounded p-2 mt-1 mb-0">{JSON.stringify(data.config, null, 1)}</pre>
+          <pre className="small bg-body-tertiary border rounded p-2 mt-1 mb-0">{JSON.stringify(data.config, null, 1)}</pre>
         </details>
       </div>
 

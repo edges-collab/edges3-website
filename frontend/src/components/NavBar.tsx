@@ -3,17 +3,20 @@
 The navigation bar: the receiver picker (EDGES-3, the EDGES-2 antennas),
 then that receiver's views (Record, Night, Calibration, Calibrated night;
 the ones it does not have are greyed out, saying why), and Status on the
-right. Switching receivers keeps the view when the new one has it.
+right, with the light/dark choice. Switching receivers keeps the view when
+the new one has it.
 
 */
 
 import { useState } from "react"
 import { Link, NavLink, useLocation, useNavigate } from "react-router"
 import { useReceivers } from "../state/Receivers"
+import { useTheme, type ThemeMode } from "../state/Theme"
 import { DEFAULT_RECEIVER, VIEWS, defaultView, hasView, missingReason } from "../utils/views"
 
 function NavBar() {
   const { receivers } = useReceivers()
+  const { mode, setMode } = useTheme()
   const navigate = useNavigate()
   const [first, second] = useLocation().pathname.split("/").filter(Boolean)
   const inReceiver = !!first && first !== "status"
@@ -31,7 +34,7 @@ function NavBar() {
 
   return (
     <div className="d-flex flex-wrap gap-3 align-items-center p-2 border-bottom">
-      <Link to="/" className="text-decoration-none text-dark">
+      <Link to="/" className="text-decoration-none text-body">
         <h1 className="edges-logo m-0">EDGES</h1>
       </Link>
       <select className="form-select form-select-sm w-auto fw-semibold" aria-label="Receiver" value={dep}
@@ -53,7 +56,13 @@ function NavBar() {
           <span key={v.key} className="nav-link py-1 disabled" title={missingReason(r, v.key)}>{v.label}</span>
         ))}
       </nav>
-      <NavLink to="/status" className={({ isActive }) => `ms-auto small ${isActive ? "fw-semibold" : "text-muted"}`}>
+      <select className="form-select form-select-sm w-auto ms-auto" aria-label="Light or dark" value={mode}
+        title="Light or dark (Auto follows your system)" onChange={(e) => setMode(e.target.value as ThemeMode)}>
+        <option value="auto">◐ Auto</option>
+        <option value="light">☀ Light</option>
+        <option value="dark">☾ Dark</option>
+      </select>
+      <NavLink to="/status" className={({ isActive }) => `small ${isActive ? "fw-semibold" : "text-muted"}`}>
         Status
       </NavLink>
     </div>

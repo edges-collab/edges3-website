@@ -97,7 +97,7 @@ export function RunStatusBox<I, R>({
         </div>
       )}
       {detail?.log_tail && busy && (
-        <pre className="small bg-light border rounded p-1 mt-2 mb-0" style={{ maxHeight: 140, overflow: "auto", whiteSpace: "pre-wrap" }}>
+        <pre className="small bg-body-tertiary border rounded p-1 mt-2 mb-0" style={{ maxHeight: 140, overflow: "auto", whiteSpace: "pre-wrap" }}>
           {detail.log_tail}
         </pre>
       )}
