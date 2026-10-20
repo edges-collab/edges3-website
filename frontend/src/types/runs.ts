@@ -29,7 +29,7 @@ export type ObservationInputs = {
   issues: string[]
 }
 
-/** Receiver-calibration settings, by section (edges-pipeline rcal). */
+/** Receiver-calibration settings, by section (edges-products rcal). */
 export type CalParams = Record<string, Record<string, number>>
 
 type Arr = (number | null)[]
@@ -111,7 +111,7 @@ export type CalibrationList = {
   defaults: Record<string, Record<string, unknown>>
   fields: CalField[]
   default_hash: string | null
-  /** the installed edges-pipeline cannot reproduce the stored calibrations */
+  /** the installed edges-products cannot reproduce the stored calibrations */
   version_skew: boolean
   other_configs: { config_hash: string; name: string; created_utc: string; code_version: string; n_done: number }[]
   pipeline: string

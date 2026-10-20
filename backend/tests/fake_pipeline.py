@@ -1,4 +1,4 @@
-"""A stand-in for ``edges_pipeline.stages.rcal.calibrate_day``, which needs real data.
+"""A stand-in for ``edges_products.stages.rcal.calibrate_day``, which needs real data.
 
 It returns the trivial solution of the stored fake products (``conftest``),
 with the calibrated loads offset by ``cterms / 100`` K so settings show, in
@@ -17,8 +17,8 @@ from conftest import S11_GOOD, rcal_arrays
 def calibrate_day(day, params=None, deployment="edges3-mro", settings=None, s11_session=None):
     from astropy import units as un
     from edges.cal import Calibrator
-    from edges_pipeline.products import _cal_day_key, rcal_info
-    from edges_pipeline.stages import rcal
+    from edges_products.products import _cal_day_key, rcal_info
+    from edges_products.stages import rcal
 
     key = _cal_day_key(day)
     if os.environ.get("FAKE_KEYERROR"):

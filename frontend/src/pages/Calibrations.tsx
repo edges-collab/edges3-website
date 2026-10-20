@@ -1,5 +1,5 @@
 /**
- * Calibrations: the receiver calibration of a day, from edges-pipeline. On
+ * Calibrations: the receiver calibration of a day, from edges-products. On
  * load the page shows the day's stored calibration (the pipeline's default
  * settings; nothing is computed). Changing a setting asks the server whether
  * that is still the default (same configuration hash); if not, the
@@ -97,12 +97,12 @@ export default function Calibrations() {
         </label>
         {list?.version_skew && (
           <div className="alert alert-warning small py-1 px-2">
-            The site's edges-pipeline ({list.pipeline}) is not the version that made the stored
+            The site's edges-products ({list.pipeline}) is not the version that made the stored
             calibrations: a computed one will differ from them by more than its settings.
           </div>
         )}
 
-        <div className="mt-2 mb-1 small fw-semibold">Settings (edges-pipeline rcal)</div>
+        <div className="mt-2 mb-1 small fw-semibold">Settings (edges-products rcal)</div>
         {list?.fields.filter((f) => f.main).map(field)}
         <button className="btn btn-link btn-sm p-0" onClick={() => setMore((m) => !m)}>
           {more ? "Fewer settings" : "More settings"}
@@ -154,7 +154,7 @@ export default function Calibrations() {
                 </span>
                 <div className="text-muted mt-1">
                   Config <code>{short(resolved.config_hash)}</code> (default{" "}
-                  <code>{short(resolved.default_hash)}</code>), by edges-pipeline {resolved.pipeline}.
+                  <code>{short(resolved.default_hash)}</code>), by edges-products {resolved.pipeline}.
                 </div>
                 {resolved.day_status && (
                   <div className="alert alert-warning py-1 px-2 mt-2 mb-0">

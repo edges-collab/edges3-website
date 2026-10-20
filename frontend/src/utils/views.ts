@@ -27,5 +27,5 @@ export const defaultView = (r: Deployment | undefined): ViewKey => (r?.night_pro
 
 export const missingReason = (r: Deployment | undefined, v: ViewKey): string =>
   v === "calibration" || v === "calibrated"
-    ? `No receiver calibrations for ${r?.label ?? "this receiver"} yet (edges-pipeline calibrates EDGES-3 only so far)`
+    ? `No receiver calibrations for ${r?.label ?? "this receiver"} yet (edges-products calibrates EDGES-3 only so far)`
     : ""

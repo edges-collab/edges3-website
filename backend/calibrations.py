@@ -1,11 +1,11 @@
 """
-Receiver calibrations from edges-pipeline
+Receiver calibrations from edges-products
 =========================================
 
 The site never calibrates the receiver itself. Every EDGES-3 calibration day
 has a *stored* calibration in the pipeline's default settings
 (``Products.calibrator``, ~0.3 s); other settings are *computed* with the same
-code (``edges_pipeline.stages.rcal.calibrate_day``, ~45 s and ~2 GB, in the
+code (``edges_products.stages.rcal.calibrate_day``, ~45 s and ~2 GB, in the
 background job runner of ``runs_api``, never in a request). The pipeline picks
 the inputs from the catalog: the recommended full S11 session of the day and
 the probe means during the ambient and hot-load spectra.
@@ -39,13 +39,13 @@ from typing import Any
 import numpy as np
 
 try:
-    from edges_pipeline.products import _cal_day_key
-    from edges_pipeline.stages import rcal
+    from edges_products.products import _cal_day_key
+    from edges_products.stages import rcal
 except ImportError:  # optional: products_api.get_products() answers 503
     rcal = None  # type: ignore[assignment]
 
     def _cal_day_key(day: Any) -> str:  # type: ignore[misc]
-        raise ValueError("edges-pipeline is not installed")
+        raise ValueError("edges-products is not installed")
 
 
 log = logging.getLogger("edges.calibrations")
@@ -119,7 +119,7 @@ def default_config(prod: Any) -> dict[str, Any]:
 
     ``hash``: the promoted configuration (else the newest with products; None
     if there are none); ``config``: its settings (else ``rcal.DEFAULT_CONFIG``);
-    ``skew``: the installed edges-pipeline computes another hash for those
+    ``skew``: the installed edges-products computes another hash for those
     settings (a different stage version), so a computation never reproduces
     the stored calibrations exactly.
     """

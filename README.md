@@ -68,27 +68,28 @@ calibrations (stored, or computed with its code for other settings), and
 the **Calibrated night** tab takes its nights and input files from the
 catalog. They use two packages that are
 **not published yet**:
-`edges-catalog` and `edges-pipeline`. They are local git repositories
+`edges-catalog` and `edges-products`. They are local git repositories
 on the EDGES server (ask the data maintainers for their location);
 install them pinned to their committed code (not editable):
 
 ```bash
 uv pip install \
   "edges-catalog @ git+file:///path/to/edges-catalog" \
-  "edges-pipeline[cal] @ git+file:///path/to/edges-pipeline"
+  "edges-products[cal] @ git+file:///path/to/edges-products"
 ```
 
 The `cal` extra pins the `edges-analysis` version the pipeline's receiver
 calibration is written for (computing a calibration with other settings
-fails without it). The site needs edges-pipeline 1b258d2 or later: its
-site clocks (`SITE_UTC_OFFSET_HOURS`) cover the EDGES-2 deployments, and
-every receiver's nights come from `Products.night`. To upgrade, reinstall
-at the new commit, e.g.
-`uv pip install --reinstall-package edges-pipeline "edges-pipeline[cal] @ git+file:///path/to/edges-pipeline@<commit>"`.
+fails without it). The site needs edges-products d3956ee or later (the package was called
+edges-pipeline until 2026-10-20; its local directory may still be named
+`edges-pipeline`): every receiver's nights and site clocks come from it
+(`Products.night`, `SITE_UTC_OFFSET_HOURS`). To upgrade, reinstall at the
+new commit, e.g.
+`uv pip install --reinstall-package edges-products "edges-products[cal] @ git+file:///path/to/edges-products@<commit>"`.
 
 Without them the Record and Night tabs, the date lists and the calibration
 flow return 503 with an install hint. The products and the catalog live under
-`EDGES_PIPELINE_ROOT` (default `/data6/edges/edges-db`); run the backend
+`EDGES_PRODUCTS_ROOT` (default `/data6/edges/edges-db`; the old `EDGES_PIPELINE_ROOT` is still read); run the backend
 as a member of the `loco` group, since the SQLite (WAL) databases need
 their group-writable `-wal`/`-shm` files even for read-only access.
 These endpoints never read the raw data tree.
@@ -256,7 +257,7 @@ receiver does not have yet (calibration for EDGES-2) are greyed out.
     read here. The badge thresholds are provisional (see `QA_THRESHOLDS` in
     `backend/products_api.py`).
 * **Calibration** (`/edges3-mro/calibration`): the receiver calibration of a day,
-  from edges-pipeline. On load it shows the day's **stored pipeline
+  from edges-products. On load it shows the day's **stored pipeline
   calibration** (the pipeline's default settings, computed by its cron for
   every calibration day; nothing is computed here): the residuals of the
   four loads (calibrated − known, or the values), the noise-wave
@@ -338,7 +339,7 @@ launching the backend.
 | `EDGES_RAW_DATA_ROOT` | `/data5/edges/data/EDGES3_data/MRO` | Root of the raw `.acq` + `.log` tree the pipeline reads |
 | `EDGES_OUTPUT_ROOT` | `<repo>/outputs` | Where calibration and observation runs are written |
 | `EDGES_BEAM_FACTOR_FILE` | `/data4/vydula/edges/packages/edges3-data-analysis/data/e3_beam_factor.hickle` (canonical; falls back to `<RAW_DATA_ROOT>/../../../e3_beam_factor.hickle` then `/mnt/data5/...`, `/scratch/...`, `$HOME/edges/...`) | Path to the EDGES-3 antenna beam factor file. Required for the absolute temperature calibration; the canonical path ships with the `edges-3-data-analysis` package. Set this explicitly only if the file lives somewhere else. |
-| `EDGES_PIPELINE_ROOT` | `/data6/edges/edges-db` | Where the catalog (`catalog.sqlite`), products database (`products.sqlite`) and QL/L1 products live (read by `/api/*`; read only) |
+| `EDGES_PRODUCTS_ROOT` | `/data6/edges/edges-db` | Where the catalog (`catalog.sqlite`), products database (`products.sqlite`) and QL/L1 products live (read by `/api/*`; read only) |
 | `EDGES_PYTHON` | current interpreter (`sys.executable`) | Python the backend shells out to when running the pipeline |
 | `EDGES_PROBE_AMBIENT` | `101` | Temperature-log code of the ambient load, shown per antenna file on the Calibrated night tab (information only) |
 | `EDGES_PROBE_COLD_LOAD` | `152` | Code 152 is `pr59_current`, **not a temperature**; informational only, not used by the calibration |
@@ -391,7 +392,7 @@ outputs/
 
 **Calibration** (`--stage calibration`), only for non-default settings
 (the default is stored by the pipeline for every day):
-`edges_pipeline.stages.rcal.calibrate_day(day, params)` (the pipeline's own
+`edges_products.stages.rcal.calibrate_day(day, params)` (the pipeline's own
 code; it takes the inputs from the catalog), then save the solution
 (`rcal.h5`) and the JSON the page plots (`result.json`). If the pipeline
 cannot calibrate the day it says why (e.g. `no_temperature`) and the run
@@ -406,7 +407,7 @@ the night (one at a time):
 1. Keep the cycles inside the night; compute Q, R and the uncalibrated
    temperature `t_load_ns Q + t_load`.
 2. Calibrate with the receiver calibration (rebuilt by
-   `edges_pipeline.products.rcal_calibrator`, stored or computed alike) and
+   `edges_products.products.rcal_calibrator`, stored or computed alike) and
    the antenna S11 model (fitted in its window, NaN outside):
    `T_cal = a Q + b`.
 3. Accumulate night means and waterfalls; save a, b and the antenna S11.
@@ -428,7 +429,7 @@ uvx pre-commit run --all-files
 ### Tests
 
 They build a tiny synthetic field mirror in a temporary directory, ingest
-it with `edges-catalog` and run the `edges-pipeline` QL and L1 stages on
+it with `edges-catalog` and run the `edges-products` QL and L1 stages on
 it (they are skipped if those packages are not installed). Stored
 calibrations are faked in its products database (as the pipeline's tests
 do); computations run the real calibration stage with

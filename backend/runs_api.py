@@ -2,7 +2,7 @@
 Calibration and observation runs
 ================================
 
-Receiver calibrations come from edges-pipeline (see ``calibrations.py``): the
+Receiver calibrations come from edges-products (see ``calibrations.py``): the
 stored default of a day is read directly (fast); other settings are computed
 by ``run_single_day.py --stage calibration`` (``rcal.calibrate_day``) as a
 background job. Nights are background jobs too. A request names a
@@ -11,7 +11,7 @@ calibration by its day and settings, ``{"day": "2026_250", "params":
 pipeline's default the stored one is used, otherwise a computed one.
 
 * a **calibration** job (non-default settings) is keyed by its day, the
-  configuration hash of its settings and the edges-pipeline version;
+  configuration hash of its settings and the edges-products version;
 * an **observation** (one night) is keyed by the night, the antenna S11
   session, its parameters, the calibration it uses and its input files.
 
@@ -110,7 +110,7 @@ def _dist_version(name: str) -> str:
 
 
 def code_version() -> str:
-    """The stage code, edges-analysis and edges-pipeline versions: part of
+    """The stage code, edges-analysis and edges-products versions: part of
     every run's key, so a code change never reuses outputs of the old code."""
     h = hashlib.sha256()
     # the stage script, and the module that writes a calibration's result.json
@@ -120,7 +120,7 @@ def code_version() -> str:
         except OSError:
             h.update(b"unknown")
     script = h.hexdigest()[:12]
-    return f"{script}+edges-{_dist_version('edges-analysis')}+pipeline-{_dist_version('edges-pipeline')}"
+    return f"{script}+edges-{_dist_version('edges-analysis')}+products-{_dist_version('edges-products')}"
 
 #: Parameters of a night: default and allowed range (must match
 #: run_single_day.DEFAULT_PARAMS, which is not imported to keep this light).
@@ -511,7 +511,7 @@ def resolve_calibration(req: CalibrationRequest) -> dict[str, Any]:
         out: dict[str, Any] = {
             "day": day, "params": params, "s11_session": s11, "config_hash": h,
             "default_hash": dflt["hash"], "is_default": h == dflt["hash"] and s11 is None,
-            "version_skew": dflt["skew"], "pipeline": _dist_version("edges-pipeline"),
+            "version_skew": dflt["skew"], "pipeline": _dist_version("edges-products"),
             "stored": calibrations.stored_row(prod, day) if stored else None,
             "day_status": status,
             "_product": stored, "_settings": settings,
@@ -621,7 +621,7 @@ def calibration_list() -> dict[str, Any]:
             "default_hash": dflt["hash"],
             "version_skew": dflt["skew"],
             "other_configs": calibrations.other_configs(prod, dflt["hash"]),
-            "pipeline": _dist_version("edges-pipeline"),
+            "pipeline": _dist_version("edges-products"),
         }
 
 

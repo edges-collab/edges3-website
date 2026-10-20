@@ -38,7 +38,7 @@ if os.environ.get("FAKE_FAIL") == stage:
     print("boom"); sys.exit(3)
 if stage == "calibration":  # the real stage, with rcal.calibrate_day mocked
     sys.path[:0] = [os.environ["FAKE_TESTS"], os.environ["FAKE_BACKEND"]]
-    from edges_pipeline.stages import rcal
+    from edges_products.stages import rcal
     import fake_pipeline
     rcal.calibrate_day = fake_pipeline.calibrate_day
     import run_single_day
@@ -99,7 +99,7 @@ def _wait(client, kind, rid, timeout=60):
 # Stored calibrations
 # ---------------------------------------------------------------------------
 def test_calibration_list(client):
-    from edges_pipeline.stages import rcal
+    from edges_products.stages import rcal
 
     c, _ = client
     d = c.get("/api/calibrations").json()
@@ -140,7 +140,7 @@ def test_stored_calibration(client):
 
 
 def test_stored_calibration_of_another_config(client):
-    from edges_pipeline.stages import rcal
+    from edges_products.stages import rcal
 
     c, _ = client
     h = rcal.config_hash(ALT_PARAMS)

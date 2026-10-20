@@ -4,7 +4,7 @@ Read-only API over the EDGES catalog and pipeline products
 
 These endpoints never touch the raw data tree: they read the precomputed
 quick-look (QL) and L1 QA products and the catalog through the
-``edges-pipeline`` and ``edges-catalog`` packages. Both packages are
+``edges-products`` and ``edges-catalog`` packages. Both packages are
 optional (they are not published yet); without them every endpoint
 returns 503 with an install hint, and the rest of the site keeps working.
 
@@ -28,9 +28,9 @@ float32 (``{"dtype", "shape", "data"}``) so NaN survives and payloads stay
 small. Time gaps longer than a few cycles are made explicit (NaN rows /
 null values) so plots show them instead of interpolating across them.
 
-Where the products live is set by ``EDGES_PIPELINE_ROOT`` (see
-``edges_pipeline.config.Settings``); the catalog is the one next to the
-products (``$EDGES_PIPELINE_ROOT/catalog.sqlite``).
+Where the products live is set by ``EDGES_PRODUCTS_ROOT`` (see
+``edges_products.config.Settings``); the catalog is the one next to the
+products (``$EDGES_PRODUCTS_ROOT/catalog.sqlite``).
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 try:
     from edges_catalog import Catalog
-    from edges_pipeline.products import SITE_UTC_OFFSET_HOURS, Products
+    from edges_products.products import SITE_UTC_OFFSET_HOURS, Products
 
     IMPORT_ERROR: str | None = None
 except ImportError as _e:  # the data packages are optional
@@ -133,7 +133,7 @@ def get_products() -> Any:
         raise HTTPException(
             status_code=503,
             detail=(
-                "The edges-pipeline/edges-catalog packages are not installed "
+                "The edges-products/edges-catalog packages are not installed "
                 f"({IMPORT_ERROR}). See README: 'Catalog and pipeline products'."
             ),
         )
@@ -444,7 +444,7 @@ def _band_series(l1: Any, t0: float, t1: float) -> tuple[dict[str, Any], list[st
     Returns the series and the unreadable products. (The per-cycle flags come
     from ``Products.l1_cycles``.)
     """
-    from edges_pipeline.stages.l1 import acq_times_to_unix
+    from edges_products.stages.l1 import acq_times_to_unix
 
     parts, missing, bands = [], [], None
     keys = ("cycle_time", "cycle_time_unix", "band_power", "band_median_q")

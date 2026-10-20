@@ -37,7 +37,7 @@ GET /{deployment}/s11/raw?raw_session_id=&label=  one load's unaveraged
 
 Times are POSIX seconds (UTC); ``start``/``end`` also take ISO strings. A
 night is named by the site's local date of its evening and runs 18:00-06:00
-site time (``Products.night``, in edges-pipeline's site clocks).
+site time (``Products.night``, in edges-products's site clocks).
 Only the deployments in :data:`DEPLOYMENTS` can be asked for.
 """
 
@@ -92,7 +92,7 @@ HK_SOURCE: dict[str, str] = {
     **{k: "sensors" for k in DEPLOYMENTS if k.startswith("edges2")},
 }
 #: Names of the site clocks (UTC offset in hours -> name), for labels only;
-#: the offsets themselves are edges-pipeline's (``SITE_UTC_OFFSET_HOURS``).
+#: the offsets themselves are edges-products's (``SITE_UTC_OFFSET_HOURS``).
 CLOCK_NAMES: dict[float, str] = {8.0: "AWST"}
 #: The most nights the night page shows at once.
 MAX_NIGHTS = 31
@@ -119,9 +119,9 @@ def _deployment(name: str) -> str:
 
 
 def _clock(deployment: str) -> tuple[float, str]:
-    """A receiver's site clock (edges-pipeline's): UTC offset (hours) and name."""
+    """A receiver's site clock (edges-products's): UTC offset (hours) and name."""
     off = products_api.SITE_UTC_OFFSET_HOURS.get(deployment)
-    if off is None:  # without edges-pipeline (the pages then say it is missing)
+    if off is None:  # without edges-products (the pages then say it is missing)
         return 0.0, "UTC"
     return off, CLOCK_NAMES.get(off, f"UTC{off:+g}")
 

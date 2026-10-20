@@ -33,8 +33,8 @@ def test_deployments(client):
     assert client.get("/api/browse/deployments").json() == [{
         "name": DEP, "label": "EDGES-3 (test)", "instrument": "EDGES-3", "band_mhz": None,
         "utc_offset_hours": 8.0, "timezone": "AWST", "night_products": True, "calibration": True}]
-    # every offered receiver has a site clock in edges-pipeline
-    from edges_pipeline.products import SITE_UTC_OFFSET_HOURS
+    # every offered receiver has a site clock in edges-products
+    from edges_products.products import SITE_UTC_OFFSET_HOURS
 
     assert set(browse_api.BANDS_MHZ) <= set(SITE_UTC_OFFSET_HOURS)  # (DEPLOYMENTS is patched here)
     # every offered EDGES-2 antenna has a band
@@ -127,7 +127,7 @@ def test_quicklook(client):
 def test_night(client):
     from datetime import date
 
-    from edges_pipeline.products import Products
+    from edges_products.products import Products
 
     n = client.get(f"/api/browse/{DEP}/night", params={"date": NIGHT}).json()
     # the same night as the pipeline's (18:00-06:00 AWST)

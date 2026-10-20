@@ -8,7 +8,7 @@ import calibrations
 
 
 def test_clean_params_keeps_only_changes():
-    from edges_pipeline.stages import rcal
+    from edges_products.stages import rcal
 
     D = rcal.DEFAULT_CONFIG
     p = calibrations.clean_params({"fit": {"cterms": 6.0, "wterms": 7, "wfstart": 50},
@@ -33,7 +33,7 @@ def test_clean_params_keeps_only_changes():
     ],
 )
 def test_clean_params_rejects(params, match):
-    from edges_pipeline.stages import rcal
+    from edges_products.stages import rcal
 
     with pytest.raises(ValueError, match=match):
         calibrations.clean_params(params, rcal.DEFAULT_CONFIG)
@@ -59,7 +59,7 @@ class _Prod:
 
 
 def test_default_config_is_the_promoted_one():
-    from edges_pipeline.stages import rcal
+    from edges_products.stages import rcal
 
     promoted = calibrations.effective(rcal.DEFAULT_CONFIG, {"fit": {"cterms": 8}})
     d = calibrations.default_config(_Prod(rcal.config_hash(promoted), promoted))

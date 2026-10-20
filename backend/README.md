@@ -1,7 +1,7 @@
 # Backend (`backend/`)
 
 FastAPI service for the EDGES-3 site: catalog and pipeline products, receiver
-calibrations from edges-pipeline, and nights calibrated with them.
+calibrations from edges-products, and nights calibrated with them.
 
 ## Files
 
@@ -9,9 +9,9 @@ calibrations from edges-pipeline, and nights calibrated with them.
 |---|---|
 | `config.py` | **All paths and tunable defaults live here.** Env-driven; see the top-level `README.md` for the full table. |
 | `backend_api.py` | FastAPI app: the routers below, `/health`, `/pipeline/status`, the `/data` static mount of `$EDGES_OUTPUT_ROOT` and the SPA fallback. |
-| `products_api.py` | Read-only `/api/night`, `/api/nights/latest`, `/api/quicklook`, `/api/l1`, `/api/housekeeping`, `/api/status` over the catalog and pipeline products (EDGES-3's night figure and file QA on the Night tab). Needs the optional `edges-catalog`/`edges-pipeline` packages. |
+| `products_api.py` | Read-only `/api/night`, `/api/nights/latest`, `/api/quicklook`, `/api/l1`, `/api/housekeeping`, `/api/status` over the catalog and pipeline products (EDGES-3's night figure and file QA on the Night tab). Needs the optional `edges-catalog`/`edges-products` packages. |
 | `runs_api.py` | `/api/calibrations/...` (stored calibrations, and computations with other settings as background jobs), `/api/observations/...` (nights, background jobs), `/api/runs/...`. |
-| `calibrations.py` | Receiver calibrations from edges-pipeline: the settings form and its validation, the day list with the pipeline's reasons for gaps (cached), the JSON a page plots (stored or computed alike) and the loads' cycles from L1. |
+| `calibrations.py` | Receiver calibrations from edges-products: the settings form and its validation, the day list with the pipeline's reasons for gaps (cached), the JSON a page plots (stored or computed alike) and the loads' cycles from L1. |
 | `browse_api.py` | `/api/browse/...` for every receiver (EDGES-3, the EDGES-2 antennas): the receivers offered (with band, site clock and what the site has for each), night bounds and the nights with data, the record per day, files, cycles, raw S11 sessions (and their unaveraged repeats), housekeeping, weather and quick-look waterfalls. |
 | `catalog_inputs.py` | Nights, antenna files and S11 sessions from the EDGES catalog (nothing scans the raw data tree). |
 | `run_single_day.py` | Two stages: `--stage calibration` (a receiver calibration with non-default settings, by `rcal.calibrate_day`) and `--stage observation` (a night calibrated with a stored or computed calibration). |
@@ -47,7 +47,7 @@ site made. Results: `result.json` (and `rcal.h5`, or `plots.npz` and
 sensible defaults for the SSH cluster. Override any of these:
 
 ```bash
-export EDGES_PIPELINE_ROOT=/path/to/edges-db   # catalog + products
+export EDGES_PRODUCTS_ROOT=/path/to/edges-db   # catalog + products
 export EDGES_OUTPUT_ROOT=/path/to/outputs
 python -m uvicorn backend_api:app --host 127.0.0.1 --port 8003
 ```

@@ -17,7 +17,7 @@ only be compared bin by bin.
 It needs (1) a *nominal* calibration applied to every night, with fixed,
 versioned scientific choices, and (2) precomputed per-night LST-binned
 products and reference statistics. Both are batch work for the pipeline
-(`edges-pipeline`, after QL/L1), not for request handlers. The website only
+(`edges-products`, after QL/L1), not for request handlers. The website only
 reads the products, as it does for QL/L1.
 
 ## Components
@@ -106,7 +106,7 @@ Read-only, like the QL/L1 pages:
 
 1. **Decide the nominal calibration** (§1) with the team: epochs, S11 choice,
    band, flagging, Sun/Moon cuts.
-2. **L2 night product** in `edges-pipeline` for the last 30 days, then a
+2. **L2 night product** in `edges-products` for the last 30 days, then a
    backfill; add `Products.l2_night(date)`.
 3. **Reference sets and statistics**; the pipeline proposes candidates, the
    team curates the first set.

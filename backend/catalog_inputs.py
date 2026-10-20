@@ -12,7 +12,7 @@ site never scans the raw data tree or merges temperature-log files.
   night with antenna data, and the antenna S11 session nearest before it.
 * **Full S11 sessions** (:func:`full_s11_sessions`), which a computed
   receiver calibration may use instead of the recommended one. The
-  calibration itself, inputs included, is edges-pipeline's
+  calibration itself, inputs included, is edges-products's
   (``calibrations.py``).
 
 The ambient-load temperature at each antenna file is shown for information

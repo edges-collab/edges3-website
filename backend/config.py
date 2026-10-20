@@ -9,8 +9,8 @@ Environment variables (all optional):
 
   EDGES_RAW_DATA_ROOT       Raw MRO data root (read only; the catalog normally
                              supplies it). Default: /data5/edges/data/EDGES3_data/MRO
-  EDGES_PIPELINE_ROOT       Catalog + pipeline products (read only), used by
-                             edges-catalog / edges-pipeline. Default: /data6/edges/edges-db
+  EDGES_PRODUCTS_ROOT       Catalog + pipeline products (read only), used by
+                             edges-catalog / edges-products. Default: /data6/edges/edges-db
   EDGES_OUTPUT_ROOT         Where calibration and observation runs are written.
                              Default: <repo>/outputs
   EDGES_BEAM_FACTOR_FILE    Path to the EDGES-3 antenna beam factor file
@@ -22,7 +22,7 @@ Environment variables (all optional):
                              (informational only; default 152)
 
 Receiver calibrations, their inputs and load temperatures included, are
-edges-pipeline's (``calibrations.py``); the observation inputs come from the
+edges-products's (``calibrations.py``); the observation inputs come from the
 catalog (``catalog_inputs.py``). Nothing scans the raw data tree or merges
 temperature-log files.
 
@@ -150,7 +150,7 @@ PYTHON: str = _detect_python()
 # thermal_control; 150 battery_voltage (V); 152 pr59_current; 0 the
 # thermal setpoint.
 #
-# The receiver calibration's probes are edges-pipeline settings
+# The receiver calibration's probes are edges-products settings
 # (``[temperatures] ambient_code`` 101, ``hot_code`` 102; the Calibrations
 # page can change them). The site only shows the ambient-load reading at
 # each antenna file, with the same probe as the pipeline by default.
@@ -196,7 +196,7 @@ def describe() -> str:
     return (
         f"REPO_ROOT          = {REPO_ROOT}\n"
         f"RAW_DATA_ROOT      = {RAW_DATA_ROOT}\n"
-        f"PIPELINE_ROOT      = {os.environ.get('EDGES_PIPELINE_ROOT', '/data6/edges/edges-db')}\n"
+        f"PRODUCTS_ROOT      = {os.environ.get('EDGES_PRODUCTS_ROOT') or os.environ.get('EDGES_PIPELINE_ROOT') or '/data6/edges/edges-db'}\n"
         f"BEAM_FACTOR_FILE   = {BEAM_FACTOR_FILE}\n"
         f"OUTPUT_ROOT        = {OUTPUT_ROOT}\n"
         f"PYTHON             = {PYTHON}\n"

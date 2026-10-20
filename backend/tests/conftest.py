@@ -1,8 +1,8 @@
 """Synthetic catalog + pipeline products for the /api tests.
 
 Builds a tiny field mirror in a temporary directory (never the real data),
-ingests it with ``edges-catalog`` and runs the ``edges-pipeline`` QL and L1
-stages on it, as ``edges-pipeline/tests/test_l1.py`` does.
+ingests it with ``edges-catalog`` and runs the ``edges-products`` QL and L1
+stages on it, as ``edges-products/tests/test_l1.py`` does.
 
 The night of 2025-04-10 at the MRO (18:00-06:00 AWST = 10:00-22:00 UTC) has:
 
@@ -29,7 +29,7 @@ A calibration day, 2025-04-12 (``2025_102``):
   100 = 25 C), so the ambient spectrum has only its snapshot.
 
 Its receiver calibration is faked in the products database (as
-``edges-pipeline/tests/test_calibration.py`` does), with a trivial solution
+``edges-products/tests/test_calibration.py`` does), with a trivial solution
 ``T = 1000 Q + 300`` (C1 = 1, C2 = 0, no noise waves, a matched receiver):
 in the default configuration (rcal version 2), and in another one
 (:data:`ALT_PARAMS`, standing in for the old Alan-mode products).
@@ -49,7 +49,7 @@ import pytest
 BACKEND = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND))
 
-pytest.importorskip("edges_pipeline")
+pytest.importorskip("edges_products")
 pytest.importorskip("edges_catalog")
 
 NFREQ = 1024
@@ -124,7 +124,7 @@ def write_acq(
 
 def garble_first_entry(path: Path) -> None:
     """Garble the time of the first data line, in place, so read_acq cannot read it
-    (as edges-pipeline tests/test_l1.py does: read_acq >= 1.3 reads the complete
+    (as edges-products tests/test_l1.py does: read_acq >= 1.3 reads the complete
     cycles of a NUL-padded file). Size, mtime and inode are kept."""
     src = bytearray(path.read_bytes())
     dl = src.index(b"\n", src.index(b"# swpos 0")) + 1  # the first data line
@@ -181,11 +181,11 @@ def fake_rcal(settings, day: str, params=None, arrays=None) -> str:
     The first configuration registered becomes the readers' default (as after
     a complete packaged run).
     """
-    from edges_pipeline.config import StageConfig
-    from edges_pipeline.db import connect, utcnow
-    from edges_pipeline.runner import register_config
-    from edges_pipeline.stages import rcal
-    from edges_pipeline.stages.common import write_product
+    from edges_products.config import StageConfig
+    from edges_products.db import connect, utcnow
+    from edges_products.runner import register_config
+    from edges_products.stages import rcal
+    from edges_products.stages.common import write_product
 
     cfg = StageConfig("rcal", "test", params or {}, rcal.STAGE_VERSION)
     con = connect(settings.products_db)
@@ -232,8 +232,8 @@ def fake_rcal(settings, day: str, params=None, arrays=None) -> str:
 def build_env(tmp: Path):
     from edges_catalog.config import Config
     from edges_catalog.ingest import ingest
-    from edges_pipeline.config import Settings
-    from edges_pipeline.runner import run_l1, run_ql
+    from edges_products.config import Settings
+    from edges_products.runner import run_l1, run_ql
 
     root = tmp / "MRO"
     write_acq(root, T_A, 40, clip_cycle=5)

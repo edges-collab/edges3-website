@@ -246,7 +246,7 @@ def test_status(client):
 
 
 def test_database_missing(tmp_path):
-    from edges_pipeline.config import Settings
+    from edges_products.config import Settings
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -265,12 +265,12 @@ def test_database_missing(tmp_path):
 
 
 def test_packages_missing(client, monkeypatch):
-    monkeypatch.setattr(products_api, "IMPORT_ERROR", "No module named 'edges_pipeline'")
+    monkeypatch.setattr(products_api, "IMPORT_ERROR", "No module named 'edges_products'")
     r = client.get("/api/night")
     assert r.status_code == 503
     assert "not installed" in r.json()["detail"]
     assert client.get("/api/status").json() == {
-        "available": False, "error": "No module named 'edges_pipeline'"
+        "available": False, "error": "No module named 'edges_products'"
     }
 
 

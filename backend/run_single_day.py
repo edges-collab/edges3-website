@@ -6,8 +6,8 @@ EDGES-3 calibration and observation stages
 Two stages, run by the website's job runner (``runs_api.py``) or by hand:
 
 * ``--stage calibration``: a receiver calibration of one day with
-  *non-default* settings, computed by edges-pipeline
-  (``edges_pipeline.stages.rcal.calibrate_day``: the stage's own code, inputs
+  *non-default* settings, computed by edges-products
+  (``edges_products.stages.rcal.calibrate_day``: the stage's own code, inputs
   from the catalog). Writes the solution (``rcal.h5``, in the layout of a stored rcal
   product) and
   ``result.json``, the JSON the Calibrations page plots
@@ -222,11 +222,11 @@ def run_calibration(
     day: str, params: dict[str, Any], run_dir: Path, catalog_db: str | None = None,
     s11_session: str | None = None,
 ) -> dict[str, Any]:
-    """Compute one day's receiver calibration with edges-pipeline (``params``:
+    """Compute one day's receiver calibration with edges-products (``params``:
     the full settings, by section). Writes
     ``rcal.h5`` (:func:`write_solution`) and ``result.json``
     (:func:`calibrations.calibration_json`)."""
-    from edges_pipeline.stages import rcal
+    from edges_products.stages import rcal
 
     import calibrations
 
@@ -234,11 +234,11 @@ def run_calibration(
     run_dir.mkdir(parents=True, exist_ok=True)
     settings = None
     if catalog_db:  # the server's catalog (the products are not needed)
-        from edges_pipeline.config import Settings
+        from edges_products.config import Settings
 
         d = Settings.default()
         settings = Settings(catalog_db, d.products_db, d.products_root)
-    print(f"[run] calibrating {day} with {json.dumps(params)} (edges-pipeline rcal) ...")
+    print(f"[run] calibrating {day} with {json.dumps(params)} (edges-products rcal) ...")
     if s11_session:
         print(f"[run] S11 session {s11_session} instead of the recommended one")
     cal, info = rcal.calibrate_day(day, params, settings=settings, s11_session=s11_session)
@@ -256,9 +256,9 @@ def run_calibration(
 
 def write_solution(path: Path, cal: Any, t_load: float, t_load_ns: float) -> None:
     """Save a noise-wave solution as an rcal (version 2) product holds it, so
-    ``edges_pipeline.products.rcal_calibrator`` rebuilds it like a stored one.
+    ``edges_products.products.rcal_calibrator`` rebuilds it like a stored one.
     (``edges.cal.Calibrator.write``/``from_file`` did not round-trip in edges 8.3.)"""
-    from edges_pipeline.stages.common import write_product
+    from edges_products.stages.common import write_product
 
     rcv = np.asarray(cal.receiver_s11)
     arrays = {
@@ -278,7 +278,7 @@ def load_calibrator(spec: dict[str, Any]) -> tuple[Any, float, float]:
     product: a stored one (``source`` "stored") or the solution a calibration
     run wrote (``source`` "computed"); ``path`` is that file either way.
     """
-    from edges_pipeline.products import rcal_calibrator
+    from edges_products.products import rcal_calibrator
 
     return rcal_calibrator(spec["path"])
 

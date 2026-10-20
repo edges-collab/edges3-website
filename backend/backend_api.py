@@ -9,7 +9,7 @@ Routers
 ``products_api``   GET /api/night, /api/nights/latest, ... — the Nightly
                    Overview, from precomputed QL/L1 products (read only)
 ``runs_api``       /api/calibrations/..., /api/observations/..., /api/runs/...
-                   — receiver calibrations from edges-pipeline (stored, or
+                   — receiver calibrations from edges-products (stored, or
                    computed with other settings as a background job) and
                    nights calibrated with them (background jobs)
 
@@ -29,7 +29,7 @@ etc.). The built SPA is served from ``frontend/dist/`` at ``/`` with a
 catch-all fallback that returns ``index.html`` for React Router paths.
 
 Nothing here scans or writes the raw data tree: inputs come from the EDGES
-catalog (``catalog_inputs.py``) and edges-pipeline (``calibrations.py``), and
+catalog (``catalog_inputs.py``) and edges-products (``calibrations.py``), and
 outputs go to ``OUTPUT_ROOT``.
 """
 
@@ -74,7 +74,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Both routers need edges-catalog and edges-pipeline; without them they
+# Both routers need edges-catalog and edges-products; without them they
 # return 503 with an install hint.
 app.include_router(products_api.router)
 app.include_router(browse_api.router)
