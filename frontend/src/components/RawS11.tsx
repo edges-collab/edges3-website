@@ -199,6 +199,12 @@ export default function RawS11View({ dep, session, off, tz }: {
       {error && <div className="text-danger small">{error}</div>}
       {!raw && !error && <div className="text-muted small">Reading the repeats…</div>}
       {raw?.errors.map((e) => <div key={e} className="text-danger small">{e}</div>)}
+      {!!raw?.left_out?.length && (
+        <div className="small text-muted mb-1">
+          Left out: {raw.left_out.map((x) => `${x.name} (${x.reason})`).join("; ")}. The field's averaged file
+          leaves them out too.
+        </div>
+      )}
       {raw && view && figure && (
         <>
           {view.states.length > 1 && (
@@ -249,7 +255,9 @@ function PipelineNote({ qa, mixed }: { qa: NonNullable<S11Session["pipeline_qa"]
         <>the mean of the {qa.n_used} of {qa.n_repeats} repeats in the main state ({left} left out:{" "}
           {qa.n_implausible ?? 0} open-like, {qa.n_outliers ?? 0} other), so the fault is repaired</>
       ) : qa.repeats === "all" ? (
-        <>the mean of all {qa.n_repeats} repeats</>
+        qa.n_used !== null && qa.n_repeats !== null && qa.n_used < qa.n_repeats
+          ? <>the mean of the {qa.n_used} of {qa.n_repeats} repeats{qa.note ? ` (${qa.note})` : ""}</>
+          : <>the mean of all {qa.n_repeats} repeats</>
       ) : (
         <>the field's averaged file{qa.note ? ` (${qa.note})` : ""}
           {mixed && ", which mixes the states below"}</>

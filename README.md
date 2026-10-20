@@ -80,7 +80,7 @@ uv pip install \
 
 The `cal` extra pins the `edges-analysis` version the pipeline's receiver
 calibration is written for (computing a calibration with other settings
-fails without it). The site needs edges-products d3956ee or later (9f03f5c for the repaired antenna S11 sessions) (the package was called
+fails without it). The site needs edges-products d3956ee or later, and 6d78606 for the antenna S11 sessions rebuilt from their repeats (the package was called
 edges-pipeline until 2026-10-20; its local directory may still be named
 `edges-pipeline`): every receiver's nights and site clocks come from it
 (`Products.night`, `SITE_UTC_OFFSET_HOURS`). To upgrade, reinstall at the
@@ -256,7 +256,7 @@ receiver does not have yet (calibration for EDGES-2) are greyed out.
     by over 5× the typical step is a glitch (orange). Each antenna session
     also shows the night stage's own check of its averaged S11
     (`Products.antenna_s11_quality`) and how the pipeline built that
-    session's antenna S11: since edges-products 9f03f5c, the mean of the
+    session's antenna S11: since edges-products 9f03f5c (6d78606: truncated repeats left out), the mean of the
     repeats in the main state, so fault sessions are **repaired** (marked
     so); sessions it rejects are marked **not used**, since nights are then
     calibrated with the last good one.

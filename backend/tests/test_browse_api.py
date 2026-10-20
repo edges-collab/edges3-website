@@ -155,10 +155,12 @@ def test_raw_s11_repeats(client):
     assert old["raw_session_id"] is None and old["n_raw_files"] == 0
     # the night stage's check: none here (the fixture makes no antenna S11 products)
     assert "pipeline_qa" in good and good["pipeline_qa"] is None
-    assert good["raw_session_id"] and good["n_raw_files"] == RAW_REPEATS * len(S11_LABELS)
+    assert good["raw_session_id"] and good["n_raw_files"] == RAW_REPEATS * len(S11_LABELS) + 1  # + the truncated one
     url = f"/api/browse/{DEP}/s11/raw"
     raw = client.get(url, params={"raw_session_id": good["raw_session_id"]}).json()  # the antenna by default
     assert raw["label"] == "ant" and set(raw["labels"]) == set(S11_LABELS) and not raw["errors"]
+    # the truncated repeat is left out, and said why
+    assert [x["index"] for x in raw["left_out"]] == [RAW_REPEATS] and "truncated (49 points" in raw["left_out"][0]["reason"]
     assert [x["index"] for x in raw["repeats"]] == list(range(RAW_REPEATS))
     t = [x["time_unix"] for x in raw["repeats"]]
     assert t[1] - t[0] == pytest.approx(120) and t[2] - t[1] == pytest.approx(120)  # the files' times

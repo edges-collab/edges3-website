@@ -23,7 +23,8 @@ A calibration day, 2025-04-12 (``2025_102``):
 - full averaged S11 sessions ``2025_102_02`` (the one to use) and
   ``2025_101_05`` (the day before); ``2025_102_02`` also with its raw
   session: :data:`RAW_REPEATS` unaveraged repeats per load, 2 min apart, the
-  antenna's last one a glitch;
+  antenna's last one a glitch, and one more antenna repeat that stops early
+  (49 points);
 - an ambient-load ``.tmp`` snapshot for 03:00 (probe 100 = 27 C);
 - a temperature log every 5 min over 03:30-06:30 UTC (hot load 111 C, probe
   100 = 25 C), so the ambient spectrum has only its snapshot.
@@ -271,6 +272,10 @@ def build_env(tmp: Path):
             path = raw / f"{label}_{i:02d}.s1p"
             path.write_text("BEGIN\nDB\n" + "\n".join(f"{f:.6f} {db} {deg}" for f in freqs) + "\nEND\n")
             os.utime(path, (t_raw + 120 * i, t_raw + 120 * i))
+    # and an antenna repeat that stopped early (as 2026_289_01's ant_05): 49 points
+    trunc = raw / f"ant_{RAW_REPEATS:02d}.s1p"
+    trunc.write_text("BEGIN\nDB\n" + "\n".join(f"{f:.6f} -1.0 10.0" for f in freqs[:49]) + "\nEND\n")
+    os.utime(trunc, (t_raw + 120 * RAW_REPEATS,) * 2)
     (root / f"{CAL_DATE}_03_amb.tmp").write_text("100 +2.7e+01\n102 +1.11e+02\n")
     _age(root / f"{CAL_DATE}_03_amb.tmp")
 

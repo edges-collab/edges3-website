@@ -633,7 +633,9 @@ def s11_raw(deployment: str, raw_session_id: int, label: str = "ant") -> dict[st
     """One load's unaveraged S11 repeats in a raw session, as measured
     (uncalibrated), in the order taken: each repeat's reflection coefficient
     and its file's time (the VNA's own clock is not set, so the file's
-    modification time, preserved from the field)."""
+    modification time, preserved from the field). Repeats off the session's
+    (most common) frequency grid, e.g. truncated ones, are ``left_out``
+    with the reason; unreadable ones are in ``errors``."""
     dep = _deployment(deployment)
     prod = products_api.get_products()
     key = ("browse-s11raw", dep, int(raw_session_id), label, products_api._data_version(prod))
@@ -659,25 +661,37 @@ def s11_raw(deployment: str, raw_session_id: int, label: str = "ant") -> dict[st
         return int(m.group(1)) if m else -1
 
     files = files.assign(index=[index(p) for p in files.relpath]).sort_values(["index", "relpath"])
-    freq, repeats, reals, imags, errors = None, [], [], [], []
+    parsed, errors = [], []
     with _heavy_slot():
         for r in files.itertuples():
             name = r.relpath.rsplit("/", 1)[-1]
             try:
                 rc = ReflectionCoefficient.from_s1p(r.path)
-                f = np.asarray(rc.freqs.to_value("MHz"), dtype=float)
-                if freq is None:
-                    freq = f
-                elif f.shape != freq.shape or not np.allclose(f, freq):
-                    raise ValueError("its frequencies differ from the first repeat's")
             except Exception as e:  # a malformed repeat: say so, keep the others
                 errors.append(f"{name}: {type(e).__name__}: {e}")
                 continue
-            g = np.asarray(rc.reflection_coefficient)
-            repeats.append({"index": int(r.index), "name": name,
-                            "time_unix": round(float(r.mtime_ns) / 1e9, 1) if _finite(r.mtime_ns) else None})
-            reals.append(_float_list(np.real(g), 7))
-            imags.append(_float_list(np.imag(g), 7))
+            parsed.append((r, name, np.asarray(rc.freqs.to_value("MHz"), dtype=float),
+                           np.asarray(rc.reflection_coefficient)))
+    # the session's grid is the most common one; a repeat on another (e.g. one
+    # that stopped early) is left out and listed, as the field's averaged file does
+    grids: list[np.ndarray] = []
+    for _, _, f, _ in parsed:
+        if not any(g.shape == f.shape and np.allclose(g, f) for g in grids):
+            grids.append(f)
+    def on(g: np.ndarray, f: np.ndarray) -> bool:
+        return g.shape == f.shape and bool(np.allclose(g, f))
+    freq = max(grids, key=lambda g: sum(on(g, f) for _, _, f, _ in parsed)) if grids else None
+    repeats, reals, imags, left_out = [], [], [], []
+    for r, name, f, g in parsed:
+        if not on(freq, f):
+            span = f"{len(f)} points, {f.min():.1f}–{f.max():.1f} MHz" if len(f) else "no points"
+            left_out.append({"name": name, "index": int(r.index),
+                             "reason": ("truncated" if len(f) < len(freq) else "another frequency grid") + f" ({span})"})
+            continue
+        repeats.append({"index": int(r.index), "name": name,
+                        "time_unix": round(float(r.mtime_ns) / 1e9, 1) if _finite(r.mtime_ns) else None})
+        reals.append(_float_list(np.real(g), 7))
+        imags.append(_float_list(np.imag(g), 7))
     out = {
         "deployment": dep,
         "raw_session_id": int(raw_session_id),
@@ -688,6 +702,7 @@ def s11_raw(deployment: str, raw_session_id: int, label: str = "ant") -> dict[st
         "repeats": repeats,
         "re": reals,
         "im": imags,
+        "left_out": left_out,
         "errors": errors,
     }
     products_api._cache.put(key, out)

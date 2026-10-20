@@ -115,6 +115,8 @@ export type RawS11 = {
   repeats: { index: number; name: string; time_unix: number | null }[]
   re: Num[][]
   im: Num[][]
+  /** repeats off the session's frequency grid (e.g. truncated), left out */
+  left_out: { name: string; index: number; reason: string }[]
   errors: string[]
 }
 
