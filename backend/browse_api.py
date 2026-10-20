@@ -338,12 +338,18 @@ def data_nights(cat: Any, deployment: str) -> list[str]:
 
 
 def s11_quality(deployment: str) -> dict[str, dict[str, Any]]:
-    """The night stage's check of each antenna S11 session (by name):
-    whether nights are calibrated with it (``ok``), why not (``reason``:
-    ``deviates`` from the recent accepted sessions, ``implausible``, ...)
-    and the deviation (``dev``, max |ΔΓ|); ``applied``: whether the default
-    night configuration uses the check. Empty where the pipeline makes no
-    antenna S11 products (EDGES-2). Cached until the products change."""
+    """The pipeline's antenna S11 of each session (by name), and the night
+    stage's check of it: whether nights are calibrated with it (``ok``),
+    why not (``reason``: ``deviates`` from the recent accepted sessions,
+    ``implausible``, ...), the deviation (``dev``, max |ΔΓ|) and whether
+    the default night configuration uses the check (``applied``). Then how
+    it was built (as11 v2, edges-products 9f03f5c): ``repeats`` is ``all``
+    (the mean of every raw repeat), ``main_state`` (only the repeats in the
+    main state: a fault session repaired) or ``averaged_file`` (the field's
+    averaged file, ``note`` says why), with ``n_repeats``, ``n_used``,
+    ``n_implausible`` (open-like repeats) and ``n_outliers`` (other repeats
+    outside the main state). Empty where the pipeline makes no antenna S11
+    products (EDGES-2). Cached until the products change."""
     prod = products_api.get_products()
     key = ("browse-s11qa", deployment, products_api._data_version(prod))
     hit = products_api._cache.get(key)
@@ -354,10 +360,20 @@ def s11_quality(deployment: str) -> dict[str, dict[str, Any]]:
             q = prod.antenna_s11_quality(deployment=deployment)
     except (LookupError, ValueError, KeyError):
         q = None
+    def count(r: Any, col: str) -> int | None:
+        v = getattr(r, col, None)
+        return int(v) if _finite(v) else None
+
+    def text(r: Any, col: str) -> str | None:
+        v = getattr(r, col, None)
+        return v if isinstance(v, str) else None
+
     out = {} if q is None else {
         str(r.session): {"ok": bool(r.qa_ok), "reason": str(r.qa_reason),
                          "dev": _scalar(round(float(r.qa_dev), 4)) if _finite(r.qa_dev) else None,
-                         "applied": bool(r.qa_applied)}
+                         "applied": bool(r.qa_applied),
+                         "repeats": text(r, "repeats"), "note": text(r, "repeats_note"),
+                         **{k: count(r, k) for k in ("n_repeats", "n_used", "n_implausible", "n_outliers")}}
         for r in q.itertuples()
     }
     products_api._cache.put(key, out)

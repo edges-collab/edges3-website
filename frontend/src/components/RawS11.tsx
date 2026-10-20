@@ -195,19 +195,7 @@ export default function RawS11View({ dep, session, off, tz }: {
           </span>
         )}
       </div>
-      {session.pipeline_qa && (
-        <div className={`small mb-1 ${session.pipeline_qa.ok ? "text-muted" : "text-danger"}`}>
-          Pipeline check of the averaged antenna S11 (night stage):{" "}
-          {session.pipeline_qa.ok
-            ? <>accepted ({session.pipeline_qa.reason}), so nights are calibrated with it</>
-            : <>rejected ({session.pipeline_qa.reason}), so nights use the last good session instead</>}
-          {session.pipeline_qa.dev !== null && <>; max |ΔΓ| from the recent accepted sessions {session.pipeline_qa.dev.toFixed(3)}</>}
-          {!session.pipeline_qa.applied && " (the default night configuration does not apply the check yet)"}.
-          {session.pipeline_qa.ok && view && view.states.length > 1 && (
-            <> Some repeats are in another state, so the average is still slightly contaminated.</>
-          )}
-        </div>
-      )}
+      {session.pipeline_qa && <PipelineNote qa={session.pipeline_qa} mixed={!!view && view.states.length > 1} />}
       {error && <div className="text-danger small">{error}</div>}
       {!raw && !error && <div className="text-muted small">Reading the repeats…</div>}
       {raw?.errors.map((e) => <div key={e} className="text-danger small">{e}</div>)}
@@ -215,7 +203,7 @@ export default function RawS11View({ dep, session, off, tz }: {
         <>
           {view.states.length > 1 && (
             <div className="alert alert-danger py-1 small mb-1">
-              <strong>{label} switches between {view.states.length} states in this session</strong>, so its averaged S11
+              <strong>{label} switches between {view.states.length} states in this session</strong>, so the field's averaged S11 file
               mixes them. Mean |S11| over {LEVEL_BAND[0]}–{LEVEL_BAND[1]} MHz:{" "}
               {view.states.map((st, k) => (
                 <span key={k}>{k > 0 && "; "}
@@ -247,6 +235,31 @@ export default function RawS11View({ dep, session, off, tz }: {
           </p>
         </>
       )}
+    </div>
+  )
+}
+
+/** How the pipeline built this session's antenna S11, and whether nights are calibrated with it. */
+function PipelineNote({ qa, mixed }: { qa: NonNullable<S11Session["pipeline_qa"]>; mixed: boolean }) {
+  const left = (qa.n_implausible ?? 0) + (qa.n_outliers ?? 0)
+  return (
+    <div className={`small mb-1 ${qa.ok ? "text-muted" : "text-danger"}`}>
+      The pipeline's antenna S11 for this session (as used by the night calibration):{" "}
+      {qa.repeats === "main_state" ? (
+        <>the mean of the {qa.n_used} of {qa.n_repeats} repeats in the main state ({left} left out:{" "}
+          {qa.n_implausible ?? 0} open-like, {qa.n_outliers ?? 0} other), so the fault is repaired</>
+      ) : qa.repeats === "all" ? (
+        <>the mean of all {qa.n_repeats} repeats</>
+      ) : (
+        <>the field's averaged file{qa.note ? ` (${qa.note})` : ""}
+          {mixed && ", which mixes the states below"}</>
+      )}
+      {"; "}
+      {qa.ok
+        ? <>accepted ({qa.reason}), so nights are calibrated with it</>
+        : <>rejected ({qa.reason}), so nights use the last good session instead</>}
+      {qa.dev !== null && <> (max |ΔΓ| from the recent accepted sessions {qa.dev.toFixed(3)})</>}
+      {!qa.applied && " (the default night configuration does not apply the check yet)"}.
     </div>
   )
 }

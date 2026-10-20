@@ -275,6 +275,12 @@ export default function RangePanels({ receiver: r, start, end, figure = false, n
                   onClick={() => setSession(x)}>
                   {x.name}{x.kind !== "antenna" ? ` (${x.kind})` : ""}{where && <span className="opacity-75"> · {where}</span>}
                   {x.raw_session_id !== null && <span className="badge text-bg-secondary ms-1">repeats</span>}
+                  {x.pipeline_qa?.repeats === "main_state" && (
+                    <span className="badge text-bg-warning ms-1"
+                      title={`The pipeline's antenna S11 averages only the ${x.pipeline_qa.n_used} of ${x.pipeline_qa.n_repeats} repeats in the main state`}>
+                      repaired
+                    </span>
+                  )}
                   {x.pipeline_qa && !x.pipeline_qa.ok && (
                     <span className="badge text-bg-danger ms-1" title={`The night calibration does not use it (${x.pipeline_qa.reason})`}>
                       not used
@@ -351,8 +357,9 @@ function S11View({ dep, session, off, tz }: { dep: string; session: S11Session; 
   return (
     <>
       <div className="small text-muted mb-1">
-        {clock(off)(stamp)} {tz}, {session.kind} session: the raw VNA readings, uncalibrated
-        ({session.labels.join(", ")}).
+        {clock(off)(stamp)} {tz}, {session.kind} session: the VNA readings as measured, uncalibrated
+        ({session.labels.join(", ")}){session.raw_session_id !== null
+          ? "; for a session with repeats these are the field's averaged files (the mean of every repeat)" : ""}.
       </div>
       {bad.map(([k, t]) => <div key={k} className="text-danger small">{k}: {"error" in t ? t.error : ""}</div>)}
       <StackedPlot panels={panels} cols={2} panelHeight={260} />

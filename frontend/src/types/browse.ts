@@ -91,10 +91,16 @@ export type BrowseFile = {
 export type S11Session = {
   session_id: number | null; stamp_unix: number; kind: string; labels: string[]; name: string
   raw_session_id: number | null; n_raw_files: number
-  /** the night stage's check of an antenna S11 session: are nights calibrated with it?
-   * (``reason``: ok, deviates, implausible, ...; ``dev``: max |ΔΓ| from the recent
-   * accepted sessions; ``applied``: the default night configuration uses the check) */
-  pipeline_qa?: { ok: boolean; reason: string; dev: number | null; applied: boolean } | null
+  /** the pipeline's antenna S11 of the session: how it was built (``repeats``: all,
+   * main_state = a fault session repaired, or averaged_file, with ``note`` why) and the
+   * night stage's check of it: are nights calibrated with it? (``reason``: ok, deviates,
+   * implausible, ...; ``dev``: max |ΔΓ| from the recent accepted sessions; ``applied``:
+   * the default night configuration uses the check) */
+  pipeline_qa?: {
+    ok: boolean; reason: string; dev: number | null; applied: boolean
+    repeats: "all" | "main_state" | "averaged_file" | null; note: string | null
+    n_repeats: number | null; n_used: number | null; n_implausible: number | null; n_outliers: number | null
+  } | null
 }
 
 /** One load's unaveraged S11 repeats in a raw session, in the order taken. */
