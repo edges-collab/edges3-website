@@ -153,6 +153,8 @@ def test_raw_s11_repeats(client):
     sessions = {x["name"]: x for x in r["s11_sessions"]}
     good, old = sessions["2025_102_02"], sessions["2025_101_05"]
     assert old["raw_session_id"] is None and old["n_raw_files"] == 0
+    # the night stage's check: none here (the fixture makes no antenna S11 products)
+    assert "pipeline_qa" in good and good["pipeline_qa"] is None
     assert good["raw_session_id"] and good["n_raw_files"] == RAW_REPEATS * len(S11_LABELS)
     url = f"/api/browse/{DEP}/s11/raw"
     raw = client.get(url, params={"raw_session_id": good["raw_session_id"]}).json()  # the antenna by default

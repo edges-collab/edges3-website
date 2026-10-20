@@ -195,6 +195,19 @@ export default function RawS11View({ dep, session, off, tz }: {
           </span>
         )}
       </div>
+      {session.pipeline_qa && (
+        <div className={`small mb-1 ${session.pipeline_qa.ok ? "text-muted" : "text-danger"}`}>
+          Pipeline check of the averaged antenna S11 (night stage):{" "}
+          {session.pipeline_qa.ok
+            ? <>accepted ({session.pipeline_qa.reason}), so nights are calibrated with it</>
+            : <>rejected ({session.pipeline_qa.reason}), so nights use the last good session instead</>}
+          {session.pipeline_qa.dev !== null && <>; max |ΔΓ| from the recent accepted sessions {session.pipeline_qa.dev.toFixed(3)}</>}
+          {!session.pipeline_qa.applied && " (the default night configuration does not apply the check yet)"}.
+          {session.pipeline_qa.ok && view && view.states.length > 1 && (
+            <> Some repeats are in another state, so the average is still slightly contaminated.</>
+          )}
+        </div>
+      )}
       {error && <div className="text-danger small">{error}</div>}
       {!raw && !error && <div className="text-muted small">Reading the repeats…</div>}
       {raw?.errors.map((e) => <div key={e} className="text-danger small">{e}</div>)}

@@ -253,8 +253,11 @@ receiver does not have yet (calibration for EDGES-2) are greyed out.
     apart: the antenna has been seen flipping to near total reflection within
     a session, which the averaged file then mixes); repeats outside the main
     state are red. Within a state, a repeat stepping away from its neighbours
-    by over 5× the typical step is a glitch (orange). No spectrum file is
-    read here. The badge thresholds are provisional (see `QA_THRESHOLDS` in
+    by over 5× the typical step is a glitch (orange). Each antenna session
+    also shows the night stage's own check of its averaged S11
+    (`Products.antenna_s11_quality`): sessions it rejects are marked
+    **not used**, since nights are then calibrated with the last good one.
+    No spectrum file is read here. The badge thresholds are provisional (see `QA_THRESHOLDS` in
     `backend/products_api.py`).
 * **Calibration** (`/edges3-mro/calibration`): the receiver calibration of a day,
   from edges-products. On load it shows the day's **stored pipeline

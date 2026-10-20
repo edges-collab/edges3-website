@@ -337,6 +337,33 @@ def data_nights(cat: Any, deployment: str) -> list[str]:
     return sorted(out)
 
 
+def s11_quality(deployment: str) -> dict[str, dict[str, Any]]:
+    """The night stage's check of each antenna S11 session (by name):
+    whether nights are calibrated with it (``ok``), why not (``reason``:
+    ``deviates`` from the recent accepted sessions, ``implausible``, ...)
+    and the deviation (``dev``, max |ΔΓ|); ``applied``: whether the default
+    night configuration uses the check. Empty where the pipeline makes no
+    antenna S11 products (EDGES-2). Cached until the products change."""
+    prod = products_api.get_products()
+    key = ("browse-s11qa", deployment, products_api._data_version(prod))
+    hit = products_api._cache.get(key)
+    if hit is not None:
+        return hit
+    try:
+        with _db_errors():
+            q = prod.antenna_s11_quality(deployment=deployment)
+    except (LookupError, ValueError, KeyError):
+        q = None
+    out = {} if q is None else {
+        str(r.session): {"ok": bool(r.qa_ok), "reason": str(r.qa_reason),
+                         "dev": _scalar(round(float(r.qa_dev), 4)) if _finite(r.qa_dev) else None,
+                         "applied": bool(r.qa_applied)}
+        for r in q.itertuples()
+    }
+    products_api._cache.put(key, out)
+    return out
+
+
 def _cached(kind: str, dep: str, build: Any) -> Any:
     """``build(cat, dep)``, kept until the catalog or products change."""
     prod = products_api.get_products()
@@ -437,7 +464,8 @@ def file_range(
 ) -> dict[str, Any]:
     """The spectrum files and S11 sessions of a range (S11 sessions also
     ``s11_pad_hours`` either side: EDGES-3 measures its S11 in the morning,
-    after the night)."""
+    after the night), each with the night stage's check of it
+    (``pipeline_qa``, see :func:`s11_quality`; null without one)."""
     dep = _deployment(deployment)
     t0, t1 = _range(start, end)
     pad = s11_pad_hours * 3600
@@ -463,6 +491,9 @@ def file_range(
         }
         for r in acq.itertuples()
     ]
+    qa = s11_quality(dep) if s11 else {}
+    for x in s11:
+        x["pipeline_qa"] = qa.get(x["name"])
     return {"deployment": dep, "start_unix": t0, "end_unix": t1, "files": files, "s11_sessions": s11}
 
 

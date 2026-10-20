@@ -275,6 +275,11 @@ export default function RangePanels({ receiver: r, start, end, figure = false, n
                   onClick={() => setSession(x)}>
                   {x.name}{x.kind !== "antenna" ? ` (${x.kind})` : ""}{where && <span className="opacity-75"> · {where}</span>}
                   {x.raw_session_id !== null && <span className="badge text-bg-secondary ms-1">repeats</span>}
+                  {x.pipeline_qa && !x.pipeline_qa.ok && (
+                    <span className="badge text-bg-danger ms-1" title={`The night calibration does not use it (${x.pipeline_qa.reason})`}>
+                      not used
+                    </span>
+                  )}
                 </button>
               )
             })}
